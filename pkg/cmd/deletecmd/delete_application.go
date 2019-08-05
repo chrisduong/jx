@@ -146,13 +146,9 @@ func (o *DeleteApplicationOptions) deleteProwApplication(repoService jenkinsv1.S
 		return deletedApplications, err
 	}
 	envMap, _, err := kube.GetOrderedEnvironments(jxClient, "")
-	currentUser, err := user.Current()
+	username, err := o.GetUsername(o.Username)
 	if err != nil {
 		log.Logger().Warnf("could not get the current user: %s", err.Error())
-	}
-	username := "unknown"
-	if currentUser != nil {
-		username = currentUser.Username
 	}
 
 	kubeClient, ns, err := o.KubeClientAndDevNamespace()
@@ -277,7 +273,7 @@ func (o *DeleteApplicationOptions) deleteJenkinsApplication() (deletedApplicatio
 
 	for _, j := range jobs {
 		if jenkins.IsMultiBranchProject(j) {
-			name := j.FullName
+			name := j.Name
 			names = append(names, name)
 			m[name] = j
 		}

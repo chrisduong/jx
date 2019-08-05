@@ -34,15 +34,15 @@ import (
 
 	"github.com/ghodss/yaml"
 
-	"github.com/Pallinder/go-randomdata"
+	randomdata "github.com/Pallinder/go-randomdata"
 	"github.com/jenkins-x/jx/pkg/io/secrets"
 	kubevault "github.com/jenkins-x/jx/pkg/kube/vault"
 	"github.com/jenkins-x/jx/pkg/vault"
 
-	"github.com/jenkins-x/jx/pkg/apis/jenkins.io"
+	jenkinsio "github.com/jenkins-x/jx/pkg/apis/jenkins.io"
 
 	"github.com/jenkins-x/jx/pkg/addon"
-	"github.com/jenkins-x/jx/pkg/apis/jenkins.io/v1"
+	v1 "github.com/jenkins-x/jx/pkg/apis/jenkins.io/v1"
 	"github.com/jenkins-x/jx/pkg/auth"
 	"github.com/jenkins-x/jx/pkg/cloud/aks"
 	"github.com/jenkins-x/jx/pkg/cloud/amazon"
@@ -59,8 +59,8 @@ import (
 	"github.com/jenkins-x/jx/pkg/util"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
-	"gopkg.in/AlecAivazis/survey.v1"
-	"gopkg.in/src-d/go-git.v4"
+	survey "gopkg.in/AlecAivazis/survey.v1"
+	git "gopkg.in/src-d/go-git.v4"
 	core_v1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -131,10 +131,10 @@ type InstallFlags struct {
 	NoGitOpsEnvRepo             bool
 	NoGitOpsEnvSetup            bool
 	NoGitOpsVault               bool
-	NextGeneration              bool
+	NextGeneration              bool `mapstructure:"next-generation"`
 	StaticJenkins               bool
-	LongTermStorage             bool
-	LongTermStorageBucketName   string
+	LongTermStorage             bool   `mapstructure:"long-term-storage"`
+	LongTermStorageBucketName   string `mapstructure:"lts-bucket"`
 	CloudBeesDomain             string
 	CloudBeesAuth               string
 }
@@ -232,8 +232,13 @@ This repository contains the source code for the Jenkins X Development Environme
 }
 `
 	longTermStorageFlagName = "long-term-storage"
+	ltsBucketFlagName       = "lts-bucket"
 	kanikoFlagName          = "kaniko"
 	namespaceFlagName       = "namespace"
+	tektonFlagName          = "tekton"
+	prowFlagName            = "prow"
+	staticJenkinsFlagName   = "static-jenkins"
+	gitOpsFlagName          = "gitops"
 )
 
 var (
@@ -364,10 +369,10 @@ func (options *InstallOptions) AddInstallFlags(cmd *cobra.Command, includesInit 
 	cmd.Flags().StringVarP(&flags.ExposeControllerPathMode, "exposecontroller-pathmode", "", "", "The ExposeController path mode for how services should be exposed as URLs. Defaults to using subnets. Use a value of `path` to use relative paths within the domain host such as when using AWS ELB host names")
 
 	cmd.Flags().StringVarP(&flags.Version, "version", "", "", "The specific platform version to install")
-	cmd.Flags().BoolVarP(&flags.Prow, "prow", "", false, "Enable Prow to implement Serverless Jenkins and support ChatOps on Pull Requests")
-	cmd.Flags().BoolVarP(&flags.Tekton, "tekton", "", false, "Enables the Tekton pipeline engine (which used to be called knative build pipeline) along with Prow to provide Serverless Jenkins. Otherwise we default to use Knative Build if you enable Prow")
+	cmd.Flags().BoolVarP(&flags.Prow, prowFlagName, "", false, "Enable Prow to implement Serverless Jenkins and support ChatOps on Pull Requests")
+	cmd.Flags().BoolVarP(&flags.Tekton, tektonFlagName, "", false, "Enables the Tekton pipeline engine (which used to be called knative build pipeline) along with Prow to provide Serverless Jenkins. Otherwise we default to use Knative Build if you enable Prow")
 	cmd.Flags().BoolVarP(&flags.KnativeBuild, "knative-build", "", false, "Note this option is deprecated now in favour of tekton. If specified this will keep using the old knative build with Prow instead of the strategic tekton")
-	cmd.Flags().BoolVarP(&flags.GitOpsMode, "gitops", "", false, "Creates a git repository for the Dev environment to manage the installation, configuration, upgrade and addition of Apps in Jenkins X all via GitOps")
+	cmd.Flags().BoolVarP(&flags.GitOpsMode, gitOpsFlagName, "", false, "Creates a git repository for the Dev environment to manage the installation, configuration, upgrade and addition of Apps in Jenkins X all via GitOps")
 	cmd.Flags().BoolVarP(&flags.NoGitOpsEnvApply, "no-gitops-env-apply", "", false, "When using GitOps to create the source code for the development environment and installation, don't run 'jx step env apply' to perform the install")
 	cmd.Flags().BoolVarP(&flags.NoGitOpsEnvRepo, "no-gitops-env-repo", "", false, "When using GitOps to create the source code for the development environment this flag disables the creation of a git repository for the source code")
 	cmd.Flags().BoolVarP(&flags.NoGitOpsVault, "no-gitops-vault", "", false, "When using GitOps to create the source code for the development environment this flag disables the creation of a vault")
@@ -377,9 +382,9 @@ func (options *InstallOptions) AddInstallFlags(cmd *cobra.Command, includesInit 
 	cmd.Flags().StringVarP(&flags.BuildPackName, "buildpack", "", "", "The name of the build pack to use for the Team")
 	cmd.Flags().BoolVarP(&flags.Kaniko, kanikoFlagName, "", false, "Use Kaniko for building docker images")
 	cmd.Flags().BoolVarP(&flags.NextGeneration, "ng", "", false, "Use the Next Generation Jenkins X features like Prow, Tekton, No Tiller, Vault, Dev GitOps")
-	cmd.Flags().BoolVarP(&flags.StaticJenkins, "static-jenkins", "", false, "Install a static Jenkins master to use as the pipeline engine. Note this functionality is deprecated in favour of running serverless Tekton builds")
+	cmd.Flags().BoolVarP(&flags.StaticJenkins, staticJenkinsFlagName, "", false, "Install a static Jenkins master to use as the pipeline engine. Note this functionality is deprecated in favour of running serverless Tekton builds")
 	cmd.Flags().BoolVarP(&flags.LongTermStorage, longTermStorageFlagName, "", false, "Enable the Long Term Storage option to save logs and other assets into a GCS bucket (supported only for GKE)")
-	cmd.Flags().StringVarP(&flags.LongTermStorageBucketName, "lts-bucket", "", "", "The bucket to use for Long Term Storage. If the bucket doesn't exist, an attempt will be made to create it, otherwise random naming will be used")
+	cmd.Flags().StringVarP(&flags.LongTermStorageBucketName, ltsBucketFlagName, "", "", "The bucket to use for Long Term Storage. If the bucket doesn't exist, an attempt will be made to create it, otherwise random naming will be used")
 	cmd.Flags().StringVarP(&options.Flags.CloudBeesDomain, "cloudbees-domain", "", "", "When setting up a letter/tenant cluster, this creates a tenant cluster on the cloudbees domain which is retrieved via the required URL")
 	cmd.Flags().StringVarP(&options.Flags.CloudBeesAuth, "cloudbees-auth", "", "", "Auth used when setting up a letter/tenant cluster, format: 'username:password'")
 	bindInstallConfigToFlags(cmd)
@@ -392,11 +397,16 @@ func (options *InstallOptions) AddInstallFlags(cmd *cobra.Command, includesInit 
 func bindInstallConfigToFlags(cmd *cobra.Command) {
 	_ = viper.BindPFlag(installConfigKey(namespaceFlagName), cmd.Flags().Lookup(namespaceFlagName))
 	_ = viper.BindPFlag(installConfigKey(kanikoFlagName), cmd.Flags().Lookup(kanikoFlagName))
+	_ = viper.BindPFlag(installConfigKey(tektonFlagName), cmd.Flags().Lookup(tektonFlagName))
+	_ = viper.BindPFlag(installConfigKey(prowFlagName), cmd.Flags().Lookup(prowFlagName))
+	_ = viper.BindPFlag(installConfigKey(gitOpsFlagName), cmd.Flags().Lookup(gitOpsFlagName))
+	_ = viper.BindPFlag(installConfigKey("next-generation"), cmd.Flags().Lookup("ng"))
+	_ = viper.BindPFlag(installConfigKey(staticJenkinsFlagName), cmd.Flags().Lookup(staticJenkinsFlagName))
 }
 
 func (flags *InstallFlags) AddCloudEnvOptions(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&flags.CloudEnvRepository, "cloud-environment-repo", "", opts.DefaultCloudEnvironmentsURL, "Cloud Environments Git repo")
-	cmd.Flags().StringVarP(&flags.VersionsRepository, "versions-repo", "", opts.DefaultVersionsURL, "Jenkins X versions Git repo")
+	cmd.Flags().StringVarP(&flags.VersionsRepository, "versions-repo", "", config.DefaultVersionsURL, "Jenkins X versions Git repo")
 	cmd.Flags().StringVarP(&flags.VersionsGitRef, "versions-ref", "", "", "Jenkins X versions Git repository reference (tag, branch, sha etc)")
 	cmd.Flags().BoolVarP(&flags.LocalCloudEnvironment, "local-cloud-environment", "", false, "Ignores default cloud-environment-repo and uses current directory ")
 }
@@ -537,19 +547,20 @@ func (options *InstallOptions) Run() error {
 	if err != nil {
 		return errors.Wrap(err, "getting install configuration")
 	}
-	// Check the provided flags before starting any installation
-	err = options.CheckFlags()
-	if err != nil {
-		return errors.Wrap(err, "checking the provided flags")
-	}
 
 	err = options.selectJenkinsInstallation()
 	if err != nil {
 		return errors.Wrap(err, "selecting the Jenkins installation type")
 	}
 
+	// Check the provided flags before starting any installation
+	err = options.CheckFlags()
+	if err != nil {
+		return errors.Wrap(err, "checking the provided flags")
+	}
+
 	if options.Flags.CloudBeesDomain != "" {
-		cloudbeesDomain := StripTrailingSlash(options.Flags.CloudBeesDomain)
+		cloudbeesDomain := util.StripTrailingSlash(options.Flags.CloudBeesDomain)
 		cloudbeesAuth := options.Flags.CloudBeesAuth
 		domain, err := options.enableTenantCluster(cloudbeesDomain, cloudbeesAuth)
 		if err != nil {
@@ -1181,6 +1192,7 @@ func (options *InstallOptions) configureHelmRepo() error {
 
 func (options *InstallOptions) selectJenkinsInstallation() error {
 	if !options.BatchMode {
+		//install type has not been configured
 		if !options.Flags.Prow && !options.Flags.StaticJenkins {
 			jenkinsInstallOptions := []string{
 				ServerlessJenkins,
@@ -1196,6 +1208,13 @@ func (options *InstallOptions) selectJenkinsInstallation() error {
 					options.Flags.Tekton = true
 				}
 			}
+		} else {
+			//determine which install type is configured
+			jenkinsInstallOption := ServerlessJenkins
+			if options.Flags.StaticJenkins {
+				jenkinsInstallOption = StaticMasterJenkins
+			}
+			log.Logger().Infof(util.QuestionAnswer("Configured Jenkins installation type", jenkinsInstallOption))
 		}
 	}
 	return nil
@@ -1303,7 +1322,7 @@ func (options *InstallOptions) getHelmValuesFiles(configStore configio.ConfigSto
 }
 
 func (options *InstallOptions) configureGitAuth() error {
-	log.Logger().Infof("\nSet up a Git username and API token to be able to perform CI/CD")
+	log.Logger().Infof("Set up a Git username and API token to be able to perform CI/CD")
 	gitUsername := options.GitRepositoryOptions.Username
 	gitServer := options.GitRepositoryOptions.ServerURL
 	gitAPIToken := options.GitRepositoryOptions.ApiToken
@@ -1604,6 +1623,7 @@ func (options *InstallOptions) configureProwInTeamSettings() error {
 			settings.ProwEngine = v1.ProwEngineTypeKnativeBuild
 			if options.Flags.Tekton {
 				settings.ProwEngine = v1.ProwEngineTypeTekton
+				settings.ImportMode = v1.ImportModeTypeYAML
 			}
 			log.Logger().Debugf("Configuring the TeamSettings for Prow with engine %s", string(settings.ProwEngine))
 			return nil
@@ -2217,7 +2237,7 @@ func (options *InstallOptions) ConfigureKaniko() error {
 			}
 		}
 		if projectID == "" {
-			projectID, err = options.GetGoogleProjectId()
+			projectID, err = options.GetGoogleProjectID("")
 			if err != nil {
 				return errors.Wrap(err, "getting the GCP project ID")
 			}
@@ -2231,8 +2251,7 @@ func (options *InstallOptions) ConfigureKaniko() error {
 
 		serviceAccountName := naming.ToValidNameTruncated(fmt.Sprintf("%s-ko", clusterName), 30)
 		log.Logger().Infof("Configuring Kaniko service account %s for project %s", util.ColorInfo(serviceAccountName), util.ColorInfo(projectID))
-
-		serviceAccountPath, err := gke.GetOrCreateServiceAccount(serviceAccountName, projectID, serviceAccountDir, gke.KanikoServiceAccountRoles)
+		serviceAccountPath, err := options.GCloud().GetOrCreateServiceAccount(serviceAccountName, projectID, serviceAccountDir, gke.KanikoServiceAccountRoles)
 		if err != nil {
 			return errors.Wrap(err, "creating the service account")
 		}
@@ -2243,6 +2262,7 @@ func (options *InstallOptions) ConfigureKaniko() error {
 		}
 
 		options.AdminSecretsService.Flags.KanikoSecret = string(serviceAccount)
+
 	}
 	return nil
 }
@@ -2393,7 +2413,7 @@ func (options *InstallOptions) configureBuildPackMode() error {
 
 func (options *InstallOptions) configureLongTermStorageBucket() error {
 
-	if options.IsFlagExplicitlySet(longTermStorageFlagName) && !options.Flags.LongTermStorage {
+	if options.IsConfigExplicitlySet("install", longTermStorageFlagName) && !options.Flags.LongTermStorage {
 		return nil
 	}
 
@@ -2418,6 +2438,8 @@ func (options *InstallOptions) configureLongTermStorageBucket() error {
 				log.Logger().Debugf("Long Term Storage not supported by provider '%s', disabling this option", options.Flags.Provider)
 			}
 		}
+	} else {
+		log.Logger().Infof(util.QuestionAnswer("Configured to use long term logs storage", util.YesNo(options.Flags.LongTermStorage)))
 	}
 
 	if options.Flags.LongTermStorage {
@@ -2429,7 +2451,7 @@ func (options *InstallOptions) configureLongTermStorageBucket() error {
 			if err != nil {
 				return errors.Wrap(err, "filling install values with cluster information")
 			}
-			bucketURL, err = gkeStorage.EnableLongTermStorage(options.installValues,
+			bucketURL, err = gkeStorage.EnableLongTermStorage(options.GCloud(), options.installValues,
 				options.Flags.LongTermStorageBucketName)
 			if err != nil {
 				return errors.Wrap(err, "enabling long term storage on GKE")
@@ -2486,7 +2508,7 @@ func (options *InstallOptions) ensureGKEInstallValuesAreFilled() error {
 	}
 
 	if options.installValues[kube.Zone] == "" {
-		gcpCurrentZone, err := options.GetGoogleZone(options.installValues[kube.ProjectID])
+		gcpCurrentZone, err := options.GetGoogleZone(options.installValues[kube.ProjectID], "")
 		if err != nil {
 			return errors.Wrap(err, "asking for the zone to create the bucket into")
 		}
@@ -3322,13 +3344,13 @@ func (options *InstallOptions) enableTenantCluster(tenantServiceURL string, tena
 	}
 
 	// Checking whether dns api is enabled
-	err = gke.EnableAPIs(projectID, "dns")
+	err = options.GCloud().EnableAPIs(projectID, "dns")
 	if err != nil {
 		return "", errors.Wrap(err, "enabling the dns api")
 	}
 
 	// Create domain if it doesn't exist and return name servers list
-	managedZone, nameServers, err := createTenantsSubDomainDNSZone(projectID, domain)
+	managedZone, nameServers, err := options.GCloud().CreateDNSZone(projectID, domain)
 	if err != nil {
 		return "", errors.Wrap(err, "while trying to create the tenants subdomain zone")
 	}
@@ -3355,29 +3377,6 @@ func ValidateDomainName(domain string) error {
 		return err
 	}
 	return nil
-}
-
-// createTenantsSubDomainDNSZone creates the tenants DNS zone if it doesn't exist
-// and returns the list of name servers for the given domain and project
-func createTenantsSubDomainDNSZone(projectID string, domain string) (string, []string, error) {
-	var managedZone, nameServers = "", []string{}
-	err := gke.CreateManagedZone(projectID, domain)
-	if err != nil {
-		return "", []string{}, errors.Wrap(err, "while trying to creating a CloudDNS managed zone")
-	}
-	managedZone, nameServers, err = gke.GetManagedZoneNameServers(projectID, domain)
-	if err != nil {
-		return "", []string{}, errors.Wrap(err, "while trying to retrieve the managed zone name servers")
-	}
-	return managedZone, nameServers, nil
-}
-
-// StripTrailingSlash removes any trailing forward slashes on the URL
-func StripTrailingSlash(url string) string {
-	if url[len(url)-1:] == "/" {
-		return url[0 : len(url)-1]
-	}
-	return url
 }
 
 func installConfigKey(key string) string {

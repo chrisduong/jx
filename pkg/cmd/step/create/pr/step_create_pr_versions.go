@@ -2,6 +2,7 @@ package pr
 
 import (
 	"fmt"
+	"github.com/jenkins-x/jx/pkg/config"
 	"io/ioutil"
 	"path/filepath"
 	"regexp"
@@ -75,7 +76,7 @@ func NewCmdStepCreateVersionPullRequest(commonOpts *opts.CommonOptions) *cobra.C
 		Short:   "Creates a Pull Request on the versions git repository for a new version of a chart/package",
 		Long:    createVersionPullRequestLong,
 		Example: createVersionPullRequestExample,
-		Aliases: []string{"version pullrequest"},
+		Aliases: []string{"version pullrequest", "version"},
 		Run: func(cmd *cobra.Command, args []string) {
 			options.Cmd = cmd
 			options.Args = args
@@ -84,7 +85,7 @@ func NewCmdStepCreateVersionPullRequest(commonOpts *opts.CommonOptions) *cobra.C
 		},
 	}
 
-	cmd.Flags().StringVarP(&options.PullRequestDetails.RepositoryGitURL, "repo", "r", opts.DefaultVersionsURL, "Jenkins X versions Git repo")
+	cmd.Flags().StringVarP(&options.PullRequestDetails.RepositoryGitURL, "repo", "r", config.DefaultVersionsURL, "Jenkins X versions Git repo")
 	cmd.Flags().StringVarP(&options.PullRequestDetails.RepositoryBranch, "branch", "", "master", "the versions git repository branch to clone and generate a pull request from")
 	cmd.Flags().StringVarP(&options.Kind, "kind", "k", "charts", "The kind of version. Possible values: "+strings.Join(version.KindStrings, ", "))
 	cmd.Flags().StringVarP(&options.Name, "name", "n", "", "The name of the version to update. e.g. the name of the chart like 'jenkins-x/prow'")
@@ -95,24 +96,20 @@ func NewCmdStepCreateVersionPullRequest(commonOpts *opts.CommonOptions) *cobra.C
 	return cmd
 }
 
-// Run implements this command
-func (o *StepCreatePullRequestVersionsOptions) Run() error {
+// ValidateVersionsOptions validates the common options for version pr steps
+func (o *StepCreatePullRequestVersionsOptions) ValidateVersionsOptions() error {
 	if o.Kind == "" {
 		return util.MissingOption("kind")
 	}
 	if util.StringArrayIndex(version.KindStrings, o.Kind) < 0 {
 		return util.InvalidOption("kind", o.Kind, version.KindStrings)
 	}
-	opts := &o.PullRequestDetails
 
-	if opts.RepositoryGitURL == "" {
+	if o.PullRequestDetails.RepositoryGitURL == "" {
 		return util.MissingOption("repo")
 	}
-	dir, err := ioutil.TempDir("", "create-version-pr")
-	if err != nil {
-		return err
-	}
 
+	var err error
 	if o.UpdateTektonImages {
 		o.builderImageVersion, err = o.findLatestBuilderImageVersion()
 		if err != nil {
@@ -147,7 +144,20 @@ func (o *StepCreatePullRequestVersionsOptions) Run() error {
 		o.PullRequestDetails.Title = "upgrade chart versions"
 		o.PullRequestDetails.Message = fmt.Sprintf("change %s to version %s", o.Name, o.Version)
 	}
+	return nil
+}
 
+// Run implements this command
+func (o *StepCreatePullRequestVersionsOptions) Run() error {
+	if err := o.ValidateVersionsOptions(); err != nil {
+		return errors.WithStack(err)
+	}
+	dir, err := ioutil.TempDir("", "create-version-pr")
+	if err != nil {
+		return err
+	}
+
+	opts := &o.PullRequestDetails
 	opts.Dir = dir
 	opts.RepositoryMessage = "versions repository"
 

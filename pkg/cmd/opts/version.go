@@ -1,10 +1,10 @@
 package opts
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/jenkins-x/jx/pkg/log"
+	"github.com/jenkins-x/jx/pkg/table"
 	"github.com/jenkins-x/jx/pkg/util"
 	"github.com/jenkins-x/jx/pkg/version"
 )
@@ -25,35 +25,103 @@ func (o *CommonOptions) CreateVersionResolver(repo string, gitRef string) (*Vers
 	}, nil
 }
 
-// ResolveDockerImage ensures the given docker image has a valid version if there is one in the version stream
-func (v *VersionResolver) ResolveDockerImage(image string) (string, error) {
-	// lets check if we already have a version
-	path := strings.SplitN(image, ":", 2)
-	if len(path) == 2 && path[1] != "" {
-		return image, nil
-	}
-	info, err := version.LoadStableVersion(v.VersionsDir, version.KindDocker, image)
+// GetPackageVersions returns the package versions and a table if they need to be rendered
+func (o *CommonOptions) GetPackageVersions(ns string, helmTLS bool) (map[string]string, table.Table) {
+	info := util.ColorInfo
+	packages := map[string]string{}
+	table := o.CreateTable()
+	table.AddRow("NAME", "VERSION")
+	jxVersion := version.GetVersion()
+	table.AddRow("jx", info(jxVersion))
+	packages["jx"] = jxVersion
+	// Jenkins X version
+	releases, _, err := o.Helm().ListReleases(ns)
 	if err != nil {
-		return image, err
-	}
-	if info.Version == "" {
-		// lets check if there is a docker.io prefix and if so lets try fetch without the docker prefix
-		prefix := "docker.io/"
-		if strings.HasPrefix(image, prefix) {
-			image = strings.TrimPrefix(image, prefix)
-			info, err = version.LoadStableVersion(v.VersionsDir, version.KindDocker, image)
-			if err != nil {
-				return image, err
+		log.Logger().Warnf("Failed to find helm installs: %s", err)
+	} else {
+		for _, release := range releases {
+			if release.Chart == "jenkins-x-platform" {
+				table.AddRow("jenkins x platform", info(release.ChartVersion))
 			}
 		}
 	}
-	if info.Version == "" {
-		log.Logger().Warnf("could not find a stable version of docker image: %s from %s\nFor background see: https://jenkins-x.io/architecture/version-stream/", image, v.VersionsDir)
-		log.Logger().Infof("Please lock this version down via the command: %s", util.ColorInfo(fmt.Sprintf("jx step create version pr -k docker -n %s -v 1.2.3", image)))
-		return image, nil
+	// Kubernetes version
+	client, err := o.KubeClient()
+	if err != nil {
+		log.Logger().Warnf("Failed to connect to Kubernetes: %s", err)
+	} else {
+		serverVersion, err := client.Discovery().ServerVersion()
+		if err != nil {
+			log.Logger().Warnf("Failed to get Kubernetes server version: %s", err)
+		} else if serverVersion != nil {
+			version := serverVersion.String()
+			packages["kubernetesCluster"] = version
+			table.AddRow("Kubernetes cluster", info(version))
+		}
 	}
-	prefix := strings.TrimSuffix(strings.TrimSpace(image), ":")
-	return prefix + ":" + info.Version, nil
+	// kubectl version
+	output, err := o.GetCommandOutput("", "kubectl", "version", "--short")
+	if err != nil {
+		log.Logger().Warnf("Failed to get kubectl version: %s", err)
+	} else {
+		for i, line := range strings.Split(output, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) > 1 {
+				v := fields[2]
+				if v != "" {
+					switch i {
+					case 0:
+						table.AddRow("kubectl", info(v))
+						packages["kubectl"] = v
+					case 1:
+						// Ignore K8S server details as we have these above
+					}
+				}
+			}
+		}
+	}
+
+	// helm version
+	output, err = o.Helm().Version(helmTLS)
+	if err != nil {
+		log.Logger().Warnf("Failed to get helm version: %s", err)
+	} else {
+		helmBinary, noTiller, helmTemplate, _ := o.TeamHelmBin()
+		if helmBinary == "helm3" || noTiller || helmTemplate {
+			table.AddRow("helm client", info(output))
+		} else {
+			for i, line := range strings.Split(output, "\n") {
+				fields := strings.Fields(line)
+				if len(fields) > 1 {
+					v := fields[1]
+					if v != "" {
+						switch i {
+						case 0:
+							table.AddRow("helm client", info(v))
+							packages["helm"] = v
+						case 1:
+							table.AddRow("helm server", info(v))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// git version
+	version, err := o.Git().Version()
+	if err != nil {
+		log.Logger().Warnf("Failed to get git version: %s", err)
+	} else {
+		table.AddRow("git", info(version))
+		packages["git"] = version
+	}
+	return packages, table
+}
+
+// ResolveDockerImage ensures the given docker image has a valid version if there is one in the version stream
+func (v *VersionResolver) ResolveDockerImage(image string) (string, error) {
+	return version.ResolveDockerImage(v.VersionsDir, image)
 }
 
 // StableVersion returns the stable version of the given kind name
@@ -64,6 +132,32 @@ func (v *VersionResolver) StableVersion(kind version.VersionKind, name string) (
 // StableVersionNumber returns the stable version number of the given kind name
 func (v *VersionResolver) StableVersionNumber(kind version.VersionKind, name string) (string, error) {
 	return version.LoadStableVersionNumber(v.VersionsDir, kind, name)
+}
+
+// VerifyPackages verifies that the package keys and current version numbers are at the required minimum versions
+func (v *VersionResolver) VerifyPackages(packages map[string]string) error {
+	errs := []error{}
+	keys := util.SortedMapKeys(packages)
+	for _, p := range keys {
+		version := packages[p]
+		if version == "" {
+			continue
+		}
+		err := v.VerifyPackage(p, version)
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return util.CombineErrors(errs...)
+}
+
+// VerifyPackage verifies the package is of a sufficient version
+func (v *VersionResolver) VerifyPackage(name string, currentVersion string) error {
+	data, err := version.LoadStableVersion(v.VersionsDir, version.KindPackage, name)
+	if err != nil {
+		return err
+	}
+	return data.VerifyPackage(name, currentVersion, v.VersionsDir)
 }
 
 // GetVersionNumber returns the version number for the given kind and name or blank string if there is no locked version

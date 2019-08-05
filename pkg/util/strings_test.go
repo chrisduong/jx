@@ -141,3 +141,18 @@ func Test_sanitizeLabel(t *testing.T) {
 		})
 	}
 }
+
+func TestStripTrailingSlash(t *testing.T) {
+	t.Parallel()
+
+	url := "http://some.url.com/"
+	assert.Equal(t, util.StripTrailingSlash(url), "http://some.url.com")
+
+	url = "http://some.other.url.com"
+	assert.Equal(t, util.StripTrailingSlash(url), "http://some.other.url.com")
+}
+
+func Test_StartsWith(t *testing.T) {
+	assert.True(t, util.StartsWith("ML-a-machine-learning-quickstart", "ML-"))
+	assert.False(t, util.StartsWith("not-a-machine-learning-quickstart", "ML-"))
+}

@@ -52,6 +52,8 @@ func TestCreatePipelineRunInfo(t *testing.T) {
 				TaskRun:        "abayer-jx-demo-qs-master-1-build-vhz8d",
 				Parents:        []string{},
 			}},
+			Type:        tekton.BuildPipeline,
+			CreatedTime: *parseTime(t, "2019-02-21T17:10:48-05:00"),
 		},
 		prName: "abayer-jx-demo-qs-master-1",
 	}, {
@@ -91,6 +93,8 @@ func TestCreatePipelineRunInfo(t *testing.T) {
 				TaskRun:        "abayer-js-test-repo-master-1-second-9czt5",
 				Parents:        []string{},
 			}},
+			Type:        tekton.BuildPipeline,
+			CreatedTime: *parseTime(t, "2019-02-21T17:02:43-05:00"),
 		},
 		prName: "abayer-js-test-repo-master-1",
 	}, {
@@ -134,8 +138,51 @@ func TestCreatePipelineRunInfo(t *testing.T) {
 					Parents:        []string{"Parent"},
 				}},
 			}},
+			Type:        tekton.BuildPipeline,
+			CreatedTime: *parseTime(t, "2019-02-21T17:07:36-05:00"),
 		},
 		prName: "abayer-js-test-repo-nested-1",
+	}, {
+		name: "from-yaml-pre-tekton-0.5",
+		expected: &tekton.PipelineRunInfo{
+			Branch:      "master",
+			Build:       "1",
+			BuildNumber: 1,
+			GitInfo: &gits.GitRepository{
+				Host:         "github.com",
+				Name:         "js-test-repo",
+				Organisation: "abayer",
+				Project:      "abayer",
+				Scheme:       "https",
+				URL:          "https://github.com/abayer/js-test-repo",
+			},
+			GitURL:       "https://github.com/abayer/js-test-repo",
+			Name:         "abayer-js-test-repo-master-1",
+			Organisation: "abayer",
+			Pipeline:     "abayer/js-test-repo/master",
+			PipelineRun:  "abayer-js-test-repo-master-1",
+			Repository:   "js-test-repo",
+			Stages: []*tekton.StageInfo{{
+				Name:           "Build",
+				CreatedTime:    *parseTime(t, "2019-03-05T15:06:13-05:00"),
+				FirstStepImage: "us.gcr.io/abayer-jx-experiment/entrypoint-fec85961206220d94e063e541ce30870@sha256:10e2a043d8fb52e6e05f633e7627aa9103d08330a97b9944b9b62a9c099e23d1",
+				PodName:        "abayer-js-test-repo-master-1-build-jmcbd-pod-a726d6",
+				Task:           "abayer-js-test-repo-master-build",
+				TaskRun:        "abayer-js-test-repo-master-1-build-jmcbd",
+				Parents:        []string{},
+			}, {
+				Name:           "Second",
+				CreatedTime:    *parseTime(t, "2019-03-05T15:07:05-05:00"),
+				FirstStepImage: "us.gcr.io/abayer-jx-experiment/entrypoint-fec85961206220d94e063e541ce30870@sha256:10e2a043d8fb52e6e05f633e7627aa9103d08330a97b9944b9b62a9c099e23d1",
+				PodName:        "abayer-js-test-repo-master-1-second-wglk8-pod-762f8d",
+				Task:           "abayer-js-test-repo-master-second",
+				TaskRun:        "abayer-js-test-repo-master-1-second-wglk8",
+				Parents:        []string{},
+			}},
+			Type:        tekton.BuildPipeline,
+			CreatedTime: *parseTime(t, "2019-03-05T15:06:13-05:00"),
+		},
+		prName: "abayer-js-test-repo-master-1",
 	}, {
 		name: "from-yaml",
 		expected: &tekton.PipelineRunInfo{
@@ -173,6 +220,8 @@ func TestCreatePipelineRunInfo(t *testing.T) {
 				TaskRun:        "abayer-js-test-repo-master-1-second-wglk8",
 				Parents:        []string{},
 			}},
+			Type:        tekton.BuildPipeline,
+			CreatedTime: *parseTime(t, "2019-03-05T15:06:13-05:00"),
 		},
 		prName: "abayer-js-test-repo-master-1",
 	}, {
@@ -186,16 +235,19 @@ func TestCreatePipelineRunInfo(t *testing.T) {
 	}}
 
 	for _, tt := range testCases {
+		if tt.name != "from-yaml" {
+			continue
+		}
 		t.Run(tt.name, func(t *testing.T) {
 			testCaseDir := path.Join("test_data", "pipeline_info", tt.name)
 
-			jxObjects := []runtime.Object{tekton_helpers_test.AssertLoadPipelineActivity(t, testCaseDir)}
-			structure := tekton_helpers_test.AssertLoadPipelineStructure(t, testCaseDir)
+			jxObjects := []runtime.Object{tekton_helpers_test.AssertLoadSinglePipelineActivity(t, testCaseDir)}
+			structure := tekton_helpers_test.AssertLoadSinglePipelineStructure(t, testCaseDir)
 			if structure != nil {
 				jxObjects = append(jxObjects, structure)
 			}
 
-			tektonObjects := []runtime.Object{tekton_helpers_test.AssertLoadPipelineRun(t, testCaseDir), tekton_helpers_test.AssertLoadPipeline(t, testCaseDir)}
+			tektonObjects := []runtime.Object{tekton_helpers_test.AssertLoadSinglePipelineRun(t, testCaseDir), tekton_helpers_test.AssertLoadSinglePipeline(t, testCaseDir)}
 			tektonObjects = append(tektonObjects, tekton_helpers_test.AssertLoadTasks(t, testCaseDir))
 			tektonObjects = append(tektonObjects, tekton_helpers_test.AssertLoadTaskRuns(t, testCaseDir))
 			tektonObjects = append(tektonObjects, tekton_helpers_test.AssertLoadPipelineResources(t, testCaseDir))

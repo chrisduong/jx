@@ -1,7 +1,9 @@
 package gits
 
 import (
+	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/google/go-github/github"
@@ -41,6 +43,7 @@ type GitProvider interface {
 	ValidateRepositoryName(org string, name string) error
 
 	CreatePullRequest(data *GitPullRequestArguments) (*GitPullRequest, error)
+
 	UpdatePullRequest(data *GitPullRequestArguments, number int) (*GitPullRequest, error)
 
 	UpdatePullRequestStatus(pr *GitPullRequest) error
@@ -99,9 +102,15 @@ type GitProvider interface {
 
 	UpdateRelease(owner string, repo string, tag string, releaseInfo *GitRelease) error
 
+	UpdateReleaseStatus(owner string, repo string, tag string, releaseInfo *GitRelease) error
+
 	ListReleases(org string, name string) ([]*GitRelease, error)
 
-	GetRelease(org string, name string, id string) (*GitRelease, error)
+	GetRelease(org string, name string, tag string) (*GitRelease, error)
+
+	UploadReleaseAsset(org string, repo string, id int64, name string, asset *os.File) (*GitReleaseAsset, error)
+
+	GetLatestRelease(org string, name string) (*GitRelease, error)
 
 	GetContent(org string, name string, path string, ref string) (*GitFileContent, error)
 
@@ -154,6 +163,8 @@ type GitProvider interface {
 	// ShouldForkForPullReques treturns true if we should create a personal fork of this repository
 	// before creating a pull request
 	ShouldForkForPullRequest(originalOwner string, repoName string, username string) bool
+
+	GetBranch(owner string, repo string, branch string) (*GitBranch, error)
 }
 
 // Gitter defines common git actions used by Jenkins X via git cli
@@ -220,7 +231,7 @@ type Gitter interface {
 	Merge(dir string, commitish string) error
 	MergeTheirs(dir string, commitish string) error
 	ResetHard(dir string, commitish string) error
-	RebaseTheirs(dir string, upstream string, branch string) error
+	RebaseTheirs(dir string, upstream string, branch string, skipEmpty bool) error
 
 	Stash(dir string) error
 
@@ -238,16 +249,21 @@ type Gitter interface {
 	LoadFileFromBranch(dir string, branch string, file string) (string, error)
 
 	GetLatestCommitMessage(dir string) (string, error)
-	GetPreviousGitTagSHA(dir string) (string, error)
-	GetCurrentGitTagSHA(dir string) (string, error)
+	GetPreviousGitTagSHA(dir string) (string, string, error)
+	GetCurrentGitTagSHA(dir string) (string, string, error)
 	FetchTags(dir string) error
 	Tags(dir string) ([]string, error)
+	FilterTags(dir string, filter string) ([]string, error)
 	CreateTag(dir string, tag string, msg string) error
 	GetLatestCommitSha(dir string) (string, error)
+	GetCommits(dir string, startSha string, endSha string) ([]GitCommit, error)
+	RevParse(dir string, rev string) (string, error)
 
 	GetRevisionBeforeDate(dir string, t time.Time) (string, error)
 	GetRevisionBeforeDateText(dir string, dateText string) (string, error)
 	DeleteRemoteBranch(dir string, remoteName string, branch string) error
+
+	SetUpstreamTo(dir string, branch string) error
 }
 
 // ConfigureGitFn callback to optionally configure git before its used for creating commits and PRs
@@ -258,4 +274,8 @@ type PullRequestDetails struct {
 	Message    string
 	BranchName string
 	Title      string
+}
+
+func (p *PullRequestDetails) String() string {
+	return fmt.Sprintf("Branch Name: %s; Title: %s; Message: %s", p.BranchName, p.Title, p.Message)
 }

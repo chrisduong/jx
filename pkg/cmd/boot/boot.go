@@ -20,10 +20,6 @@ import (
 	"github.com/jenkins-x/jx/pkg/cmd/templates"
 )
 
-const (
-	defaultBootRepository = "https://github.com/jstrachan/environment-simple-tekton.git"
-)
-
 // BootOptions options for the command
 type BootOptions struct {
 	*opts.CommonOptions
@@ -43,7 +39,7 @@ var (
 		jx create cluster gke --skip-installation
 
 		# lets get the GitOps repository source code
-		git clone https://github.com/jstrachan/environment-simple-tekton.git my-jx-config
+		git clone https://github.com/jenkins-x/jenkins-x-boot-config.git my-jx-config
 		cd my-jx-config
 
 		# now lets boot up Jenkins X installing/upgrading whatever is needed
@@ -70,7 +66,7 @@ func NewCmdBoot(commonOpts *opts.CommonOptions) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&options.Dir, "dir", "d", ".", "the directory to look for the Jenkins X Pipeline, requirements and charts")
-	cmd.Flags().StringVarP(&options.GitURL, "git-url", "u", defaultBootRepository, "the Git clone URL for the JX Boot source to boot up")
+	cmd.Flags().StringVarP(&options.GitURL, "git-url", "u", config.DefaultBootRepository, "the Git clone URL for the JX Boot source to boot up")
 	return cmd
 }
 
@@ -87,9 +83,12 @@ func (o *BootOptions) Run() error {
 		return err
 	}
 	if !exists {
-		log.Logger().Infof("No Jenkins X pipeline file %s found. You are not running this command from inside a Jenkins X Boot git clone\n\n", info(pipelineFile))
+		log.Logger().Infof("No Jenkins X pipeline file %s found. You are not running this command from inside a Jenkins X Boot git clone", info(pipelineFile))
 
 		gitURL := o.GitURL
+		if config.LoadActiveInstallProfile() == config.CloudBeesProfile && gitURL == config.DefaultBootRepository {
+			gitURL = config.DefaultCloudBeesBootRepository
+		}
 		if gitURL == "" {
 			return util.MissingOption("git-url")
 		}
@@ -102,8 +101,8 @@ func (o *BootOptions) Run() error {
 		cloneDir := filepath.Join(o.Dir, repo)
 
 		if !o.BatchMode {
-			log.Logger().Infof("To continue we will clone: %s\n", info(gitURL))
-			log.Logger().Infof("To the directory: %s\n\n", info(cloneDir))
+			log.Logger().Infof("To continue we will clone: %s", info(gitURL))
+			log.Logger().Infof("To the directory: %s", info(cloneDir))
 
 			help := "A git clone of a Jenkins X Boot source repository is required for 'jx boot'"
 			message := "Do you want to clone the Jenkins X Boot Git repository?"
@@ -168,7 +167,7 @@ func (o *BootOptions) Run() error {
 		return err
 	}
 
-	log.Logger().Infof("booting up Jenkins X\n")
+	log.Logger().Infof("booting up Jenkins X")
 
 	// now lets really boot
 	_, so := create.NewCmdStepCreateTaskAndOption(o.CommonOptions)
@@ -179,30 +178,42 @@ func (o *BootOptions) Run() error {
 	so.AdditionalEnvVars = map[string]string{
 		"JX_NO_TILLER": "true",
 	}
+
+	so.VersionResolver, err = o.CreateVersionResolver(requirements.VersionStream.URL, requirements.VersionStream.Ref)
+	if err != nil {
+		return errors.Wrapf(err, "there was a problem creating a version resolver from versions stream repository %s and ref %s", requirements.VersionStream.URL, requirements.VersionStream.Ref)
+	}
+
+	if o.BatchMode {
+		so.AdditionalEnvVars["JX_BATCH_MODE"] = "true"
+	}
+	ns := FindBootNamespace(projectConfig, requirements)
+	if ns != "" {
+		so.CommonOptions.SetDevNamespace(ns)
+	}
 	err = so.Run()
 	if err != nil {
 		return errors.Wrapf(err, "failed to interpret pipeline file %s", pipelineFile)
 	}
 
 	// if we can find the deploy namespace lets switch kubernetes context to it so the user can use `jx` commands immediately
-	ns := FindBootNamespace(projectConfig, requirements)
 	if ns != "" {
 		no := &namespace.NamespaceOptions{}
 		no.CommonOptions = o.CommonOptions
 		no.Args = []string{ns}
-		log.Logger().Infof("switching to the namespace %s so that you can use %s commands on the installation\n", info(ns), info("jx"))
+		log.Logger().Infof("switching to the namespace %s so that you can use %s commands on the installation", info(ns), info("jx"))
 		return no.Run()
 	}
 	return nil
 }
 
 func (o *BootOptions) verifyRequirements(requirements *config.RequirementsConfig, requirementsFile string) error {
-	provider := requirements.Provider
+	provider := requirements.Cluster.Provider
 	if provider == "" {
 		return config.MissingRequirement("provider", requirementsFile)
 	}
 	if provider == "" {
-		if requirements.ProjectID == "" {
+		if requirements.Cluster.ProjectID == "" {
 			return config.MissingRequirement("project", requirementsFile)
 		}
 	}

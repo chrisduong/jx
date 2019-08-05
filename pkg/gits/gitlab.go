@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -687,6 +688,11 @@ func (g *GitlabProvider) UpdateRelease(owner string, repo string, tag string, re
 	return nil
 }
 
+// UpdateReleaseStatus is not supported for this git provider
+func (g *GitlabProvider) UpdateReleaseStatus(owner string, repo string, tag string, releaseInfo *GitRelease) error {
+	return nil
+}
+
 // IssueURL returns the URL of the issue
 func (g *GitlabProvider) IssueURL(org string, name string, number int, isPull bool) string {
 	return ""
@@ -736,4 +742,20 @@ func (g *GitlabProvider) ListCommits(owner, repo string, opt *ListCommitsArgumen
 // AddLabelsToIssue adds labels to issues or pullrequests
 func (g *GitlabProvider) AddLabelsToIssue(owner, repo string, number int, labels []string) error {
 	return fmt.Errorf("Getting content not supported on gitlab yet")
+}
+
+// GetLatestRelease fetches the latest release from the git provider for org and name
+func (g *GitlabProvider) GetLatestRelease(org string, name string) (*GitRelease, error) {
+	// TODO
+	return nil, nil
+}
+
+// UploadReleaseAsset will upload an asset to org/repo to a release with id, giving it a name, it will return the release asset from the git provider
+func (g *GitlabProvider) UploadReleaseAsset(org string, repo string, id int64, name string, asset *os.File) (*GitReleaseAsset, error) {
+	return nil, nil
+}
+
+// GetBranch returns the branch information for an owner/repo, including the commit at the tip
+func (g *GitlabProvider) GetBranch(owner string, repo string, branch string) (*GitBranch, error) {
+	return nil, nil
 }

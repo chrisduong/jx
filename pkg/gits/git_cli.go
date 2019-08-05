@@ -377,6 +377,41 @@ func (g *GitCLI) CommitIfChanges(dir string, message string) error {
 	return g.CommitDir(dir, message)
 }
 
+// GetCommits returns the commits in a range, exclusive of startSha and inclusive of endSha
+func (g *GitCLI) GetCommits(dir string, startSha string, endSha string) ([]GitCommit, error) {
+	// use a custom format to get commits, using %x1e to separate commits and %x1f to separate fields
+	args := []string{"log", "--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1f%s%n%b%x1e", fmt.Sprintf("%s..%s", startSha, endSha)}
+	out, err := g.gitCmdWithOutput(dir, args...)
+	if err != nil {
+		return nil, errors.Wrapf(err, "running git %s", strings.Join(args, " "))
+	}
+	answer := make([]GitCommit, 0)
+	commits := strings.Split(out, "\x1e")
+	for _, rawCommit := range commits {
+		rawCommit = strings.TrimSpace(rawCommit)
+		if rawCommit == "" {
+			continue
+		}
+		fields := strings.Split(rawCommit, "\x1f")
+		commit := GitCommit{}
+		commit.SHA = fields[0]
+
+		commit.Author = &GitUser{
+			Name:  fields[1],
+			Email: fields[2],
+		}
+
+		commit.Committer = &GitUser{
+			Name:  fields[3],
+			Email: fields[4],
+		}
+
+		commit.Message = fields[5]
+		answer = append(answer, commit)
+	}
+	return answer, nil
+}
+
 // CommitDir commits all changes from the given directory
 func (g *GitCLI) CommitDir(dir string, message string) error {
 	return g.gitCmd(dir, "commit", "-m", message)
@@ -655,23 +690,9 @@ func (g *GitCLI) RemoteBranchNames(dir string, prefix string) ([]string, error) 
 	return answer, nil
 }
 
-// GetPreviousGitTagSHA returns the previous git tag from the repository at the given directory
-func (g *GitCLI) GetPreviousGitTagSHA(dir string) (string, error) {
-	latestTag, err := g.gitCmdWithOutput(dir, "describe", "--tags", "--always")
-	if err != nil {
-		return "", fmt.Errorf("failed to find latest tag for project in %s : %s", dir, err)
-	}
-
-	previousTag, err := g.gitCmdWithOutput(dir, "describe", "--tags", "--always", latestTag+"^^")
-	if err != nil {
-		return "", fmt.Errorf("failed to find previous tag for project in %s : %s", dir, err)
-	}
-
-	previousTagSha, err := g.gitCmdWithOutput(dir, "rev-list", "-n", "1", previousTag)
-	if err != nil {
-		return "", errors.Wrapf(err, "running for git rev-list -n 1 %s", previousTag)
-	}
-	return previousTagSha, nil
+// GetPreviousGitTagSHA returns the previous git SHA and tag from the repository at the given directory
+func (g *GitCLI) GetPreviousGitTagSHA(dir string) (string, string, error) {
+	return g.nthTagSHA(dir, 2)
 }
 
 // GetRevisionBeforeDate returns the revision before the given date
@@ -690,8 +711,8 @@ func (g *GitCLI) GetRevisionBeforeDateText(dir string, dateText string) (string,
 }
 
 // GetCurrentGitTagSHA return the SHA of the current git tag from the repository at the given directory
-func (g *GitCLI) GetCurrentGitTagSHA(dir string) (string, error) {
-	return g.gitCmdWithOutput(dir, "rev-list", "--tags", "--max-count=1")
+func (g *GitCLI) GetCurrentGitTagSHA(dir string) (string, string, error) {
+	return g.nthTagSHA(dir, 1)
 }
 
 // GetLatestCommitMessage returns the latest git commit message
@@ -701,15 +722,23 @@ func (g *GitCLI) GetLatestCommitMessage(dir string) (string, error) {
 
 // FetchTags fetches all the tags
 func (g *GitCLI) FetchTags(dir string) error {
-	return g.gitCmd("", "fetch", "--tags", "-v")
+	return g.gitCmd(dir, "fetch", "--tags")
 }
 
 // Tags returns all tags from the repository at the given directory
 func (g *GitCLI) Tags(dir string) ([]string, error) {
-	tags := []string{}
-	text, err := g.gitCmdWithOutput(dir, "tag")
+	return g.FilterTags(dir, "")
+}
+
+// FilterTags returns all tags from the repository at the given directory that match the filter
+func (g *GitCLI) FilterTags(dir string, filter string) ([]string, error) {
+	args := []string{"tag"}
+	if filter != "" {
+		args = append(args, "--list", filter)
+	}
+	text, err := g.gitCmdWithOutput(dir, args...)
 	if err != nil {
-		return tags, err
+		return nil, err
 	}
 	text = strings.TrimSuffix(text, "\n")
 	return strings.Split(text, "\n"), nil
@@ -717,7 +746,7 @@ func (g *GitCLI) Tags(dir string) ([]string, error) {
 
 // CreateTag creates a tag with the given name and message in the repository at the given directory
 func (g *GitCLI) CreateTag(dir string, tag string, msg string) error {
-	return g.gitCmd("", "tag", "-fa", tag, "-m", msg)
+	return g.gitCmd(dir, "tag", "-fa", tag, "-m", msg)
 }
 
 // PrintCreateRepositoryGenerateAccessToken prints the access token URL of a Git repository
@@ -858,7 +887,7 @@ func (g *GitCLI) MergeTheirs(dir string, commitish string) error {
 }
 
 // RebaseTheirs runs git rebase upstream branch with the strategy option theirs
-func (g *GitCLI) RebaseTheirs(dir string, upstream string, branch string) error {
+func (g *GitCLI) RebaseTheirs(dir string, upstream string, branch string, skipEmpty bool) error {
 	args := []string{
 		"rebase",
 		"--strategy-option=theirs",
@@ -867,5 +896,56 @@ func (g *GitCLI) RebaseTheirs(dir string, upstream string, branch string) error 
 	if branch != "" {
 		args = append(args, branch)
 	}
-	return g.gitCmd(dir, args...)
+	err := g.gitCmd(dir, args...)
+	if skipEmpty {
+		// If skipEmpty is passed, then if the failure is due to an empty commit, run `git rebase --skip` to move on
+		// Weirdly git has no option on rebase to just do this
+		for err != nil && IsEmptyCommitError(err) {
+			err = g.gitCmd(dir, "rebase", "--skip")
+		}
+	}
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
+// RevParse runs git rev-parse on rev
+func (g *GitCLI) RevParse(dir string, rev string) (string, error) {
+	return g.gitCmdWithOutput(dir, "rev-parse", rev)
+}
+
+// SetUpstreamTo will set the given branch to track the origin branch with the same name
+func (g *GitCLI) SetUpstreamTo(dir string, branch string) error {
+	return g.gitCmd(dir, "branch", "--set-upstream-to", fmt.Sprintf("origin/%s", branch), branch)
+}
+
+// nthTagSHA return the SHA and tag name of nth tag in reverse chronological order from the repository at the given directory.
+// If the nth tag does not exist empty strings without an error are returned.
+func (g *GitCLI) nthTagSHA(dir string, n int) (string, string, error) {
+	args := []string{
+		"for-each-ref",
+		"--sort=-creatordate",
+		"--format=%(objectname)%00%(refname:short)",
+		fmt.Sprintf("--count=%d", n),
+		"refs/tags",
+	}
+	out, err := g.gitCmdWithOutput(dir, args...)
+	if err != nil {
+		return "", "", errors.Wrapf(err, "running git %s", strings.Join(args, " "))
+	}
+
+	tagList := strings.Split(out, "\n")
+
+	if len(tagList) < n {
+		return "", "", nil
+	}
+
+	fields := strings.Split(tagList[n-1], "\x00")
+
+	if len(fields) != 2 {
+		return "", "", errors.Errorf("Unexpected format for returned tag and sha: '%s'", tagList[n-1])
+	}
+
+	return fields[0], fields[1], nil
 }

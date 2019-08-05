@@ -9,6 +9,7 @@ import (
 	jenkinsio "github.com/jenkins-x/jx/pkg/apis/jenkins.io"
 	"github.com/jenkins-x/jx/pkg/kube/naming"
 	"github.com/jenkins-x/jx/pkg/prow"
+	"k8s.io/apimachinery/pkg/util/rand"
 
 	"github.com/jenkins-x/jx/pkg/client/clientset/versioned"
 	jxClient "github.com/jenkins-x/jx/pkg/client/clientset/versioned"
@@ -42,11 +43,7 @@ func (s PipelineType) String() string {
 
 // GeneratePipelineActivity generates a initial PipelineActivity CRD so UI/get act can get an earlier notification that the jobs have been scheduled
 func GeneratePipelineActivity(buildNumber string, branch string, gitInfo *gits.GitRepository, pr *prow.PullRefs, pipelineType PipelineType) *kube.PromoteStepActivityKey {
-	name := gitInfo.Organisation + "-" + gitInfo.Name + "-" + branch
-	if pipelineType == MetaPipeline {
-		name += "-" + pipelineType.String()
-	}
-	name += "-" + buildNumber
+	name := gitInfo.Organisation + "-" + gitInfo.Name + "-" + branch + "-" + buildNumber
 
 	pipeline := gitInfo.Organisation + "/" + gitInfo.Name + "/" + branch
 	log.Logger().Infof("PipelineActivity for %s", name)
@@ -120,7 +117,7 @@ func CreateOrUpdateTask(tektonClient tektonclient.Interface, ns string, created 
 }
 
 // GenerateNextBuildNumber generates a new build number for the given project.
-func GenerateNextBuildNumber(tektonClient tektonclient.Interface, jxClient jxClient.Interface, ns string, gitInfo *gits.GitRepository, branch string, duration time.Duration, pipelineIdentifier string) (string, error) {
+func GenerateNextBuildNumber(tektonClient tektonclient.Interface, jxClient jxClient.Interface, ns string, gitInfo *gits.GitRepository, branch string, duration time.Duration, context string) (string, error) {
 	nextBuildNumber := ""
 	resourceInterface := jxClient.JenkinsV1().SourceRepositories(ns)
 	// TODO: How does SourceRepository handle name overlap?
@@ -147,9 +144,16 @@ func GenerateNextBuildNumber(tektonClient tektonclient.Interface, jxClient jxCli
 		for nextNumber := lastBuildNumber + 1; true; nextNumber++ {
 			// lets check there is not already a PipelineRun for this number
 			buildIdentifier := strconv.Itoa(nextNumber)
-			pipelineResourceName := syntax.PipelineRunName(pipelineIdentifier, buildIdentifier)
-			_, err := tektonClient.TektonV1alpha1().PipelineRuns(ns).Get(pipelineResourceName, metav1.GetOptions{})
-			if err == nil {
+
+			labelSelector := fmt.Sprintf("owner=%s,repo=%s,branch=%s,build=%s", gitInfo.Organisation, gitInfo.Name, branch, buildIdentifier)
+			if context != "" {
+				labelSelector += fmt.Sprintf(",context=%s", context)
+			}
+
+			prs, err := tektonClient.TektonV1alpha1().PipelineRuns(ns).List(metav1.ListOptions{
+				LabelSelector: labelSelector,
+			})
+			if err == nil && len(prs.Items) > 0 {
 				// lets try make another build number as there's already a PipelineRun
 				// which could be due to name clashes
 				continue
@@ -209,7 +213,6 @@ func CreatePipelineRun(resources []*pipelineapi.PipelineResource,
 	name string,
 	apiVersion string,
 	labels map[string]string,
-	trigger string,
 	serviceAccount string,
 	pipelineParams []pipelineapi.Param,
 	timeout *metav1.Duration) *pipelineapi.PipelineRun {
@@ -239,9 +242,6 @@ func CreatePipelineRun(resources []*pipelineapi.PipelineResource,
 		},
 		Spec: pipelineapi.PipelineRunSpec{
 			ServiceAccount: serviceAccount,
-			Trigger: pipelineapi.PipelineTrigger{
-				Type: pipelineapi.PipelineTriggerType(trigger),
-			},
 			PipelineRef: pipelineapi.PipelineRef{
 				Name:       name,
 				APIVersion: apiVersion,
@@ -295,12 +295,12 @@ func CreateOrUpdatePipeline(tektonClient tektonclient.Interface, ns string, crea
 }
 
 // PipelineResourceNameFromGitInfo returns the pipeline resource name for the given git repository, branch and context
-func PipelineResourceNameFromGitInfo(gitInfo *gits.GitRepository, branch string, context string, pipelineType PipelineType) string {
-	return PipelineResourceName(gitInfo.Organisation, gitInfo.Name, branch, context, pipelineType)
+func PipelineResourceNameFromGitInfo(gitInfo *gits.GitRepository, branch string, context string, pipelineType PipelineType, tektonClient tektonclient.Interface, ns string) string {
+	return PipelineResourceName(gitInfo.Organisation, gitInfo.Name, branch, context, pipelineType, tektonClient, ns)
 }
 
 // PipelineResourceName returns the pipeline resource name for the given git org, repo name, branch and context
-func PipelineResourceName(organisation string, name string, branch string, context string, pipelineType PipelineType) string {
+func PipelineResourceName(organisation string, name string, branch string, context string, pipelineType PipelineType, tektonClient tektonclient.Interface, ns string) string {
 	dirtyName := organisation + "-" + name + "-" + branch
 	if context != "" {
 		dirtyName += "-" + context
@@ -309,12 +309,14 @@ func PipelineResourceName(organisation string, name string, branch string, conte
 	if pipelineType == MetaPipeline {
 		dirtyName = pipelineType.String() + "-" + dirtyName
 	}
-	// TODO: https://github.com/tektoncd/pipeline/issues/481 causes
-	// problems since autogenerated container names can end up surpassing 63
-	// characters, which is not allowed. Longest known prefix for now is 28
-	// chars (build-step-artifact-copy-to-), so we truncate to 35 so the
-	// generated container names are no more than 63 chars.
 	resourceName := naming.ToValidNameTruncated(dirtyName, 31)
+
+	if tektonClient != nil {
+		_, err := tektonClient.TektonV1alpha1().PipelineResources(ns).Get(resourceName, metav1.GetOptions{})
+		if err == nil {
+			return resourceName + "-" + rand.String(5)
+		}
+	}
 	return resourceName
 }
 

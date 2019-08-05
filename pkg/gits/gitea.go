@@ -3,6 +3,7 @@ package gits
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -659,6 +660,40 @@ func (p *GiteaProvider) UpdateRelease(owner string, repo string, tag string, rel
 	return err
 }
 
+// UpdateReleaseStatus updates the state (release/prerelease) of a release
+func (p *GiteaProvider) UpdateReleaseStatus(owner string, repo string, tag string, releaseInfo *GitRelease) error {
+	var release *gitea.Release
+	releases, err := p.Client.ListReleases(owner, repo)
+	found := false
+	for _, rel := range releases {
+		if rel.TagName == tag {
+			release = rel
+			found = true
+			break
+		}
+	}
+	flag := false
+
+	if found {
+		editRelease := gitea.EditReleaseOption{
+			TagName:      release.TagName,
+			Title:        release.Title,
+			Note:         release.Note,
+			IsDraft:      &flag,
+			IsPrerelease: &flag,
+		}
+
+		if editRelease.IsPrerelease != &releaseInfo.PreRelease {
+			editRelease.IsPrerelease = &releaseInfo.PreRelease
+		}
+		_, err := p.Client.EditRelease(owner, repo, release.ID, editRelease)
+		if err != nil {
+			return err
+		}
+	}
+	return err
+}
+
 func (p *GiteaProvider) HasIssues() bool {
 	return true
 }
@@ -764,4 +799,23 @@ func (p *GiteaProvider) ListCommits(owner, repo string, opt *ListCommitsArgument
 // AddLabelsToIssue adds labels to issues or pullrequests
 func (p *GiteaProvider) AddLabelsToIssue(owner, repo string, number int, labels []string) error {
 	return fmt.Errorf("Getting content not supported on gitea")
+}
+
+// GetLatestRelease fetches the latest release from the git provider for org and name
+func (p *GiteaProvider) GetLatestRelease(org string, name string) (*GitRelease, error) {
+	releases, err := p.Client.ListReleases(org, name)
+	if err != nil {
+		return nil, errors2.Wrapf(err, "getting releases for %s/%s", org, name)
+	}
+	return toGiteaRelease(org, name, releases[0]), nil
+}
+
+// UploadReleaseAsset will upload an asset to org/repo to a release with id, giving it a name, it will return the release asset from the git provider
+func (p *GiteaProvider) UploadReleaseAsset(org string, repo string, id int64, name string, asset *os.File) (*GitReleaseAsset, error) {
+	return nil, nil
+}
+
+// GetBranch returns the branch information for an owner/repo, including the commit at the tip
+func (p *GiteaProvider) GetBranch(owner string, repo string, branch string) (*GitBranch, error) {
+	return nil, nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/jenkins-x/jx/pkg/config"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -13,8 +14,8 @@ import (
 	"text/template"
 	"time"
 
-	randomdata "github.com/Pallinder/go-randomdata"
-	filemutex "github.com/alexflint/go-filemutex"
+	"github.com/Pallinder/go-randomdata"
+	"github.com/alexflint/go-filemutex"
 	"github.com/blang/semver"
 	jenkinsv1 "github.com/jenkins-x/jx/pkg/apis/jenkins.io/v1"
 	"github.com/jenkins-x/jx/pkg/cloud"
@@ -33,7 +34,7 @@ import (
 	"github.com/jenkins-x/jx/pkg/version"
 	"github.com/pborman/uuid"
 	"github.com/pkg/errors"
-	survey "gopkg.in/AlecAivazis/survey.v1"
+	"gopkg.in/AlecAivazis/survey.v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -72,7 +73,6 @@ const (
 	CloudEnvSopsConfigFile      = ".sops.yaml"
 	DefaultInstallTimeout       = "6000"
 	DefaultCloudEnvironmentsURL = "https://github.com/jenkins-x/cloud-environments"
-	DefaultVersionsURL          = "https://github.com/jenkins-x/jenkins-x-versions.git"
 )
 
 // Prow keeps install information for prow chart
@@ -1019,6 +1019,18 @@ func (o *CommonOptions) InstallTerraform() error {
 
 // GetLatestJXVersion returns latest jx version
 func (o *CommonOptions) GetLatestJXVersion() (semver.Version, error) {
+	if config.LoadActiveInstallProfile() == config.CloudBeesProfile {
+		err := o.InstallRequirements(cloud.GKE)
+		if err != nil {
+			return semver.Version{}, err
+		}
+		gcloudOpts := &gke.GCloud{}
+		latestVersionStrings, err := gcloudOpts.ListObjects("artifacts.jenkinsxio.appspot.com", "binaries/jx")
+		if err != nil {
+			return semver.Version{}, nil
+		}
+		return util.GetLatestVersionStringCloudBeesBucketURLs(latestVersionStrings)
+	}
 	if runtime.GOOS == "darwin" && !o.NoBrew {
 		log.Logger().Debugf("Locating latest JX version from HomeBrew")
 		// incase auto-update is not enabled, lets perform an explicit brew update first
@@ -1183,7 +1195,13 @@ func (o *CommonOptions) InstallJx(upgrade bool, version string) error {
 	if runtime.GOOS == "windows" {
 		extension = "zip"
 	}
-	clientURL := fmt.Sprintf("https://github.com/"+org+"/"+repo+"/releases/download/v%s/"+binary+"-%s-%s.%s", version, runtime.GOOS, runtime.GOARCH, extension)
+	clientURL := ""
+	if config.LoadActiveInstallProfile() == config.CloudBeesProfile {
+		clientURL = fmt.Sprintf("https://storage.googleapis.com/artifacts.jenkinsxio.appspot.com/binaries/jx/%s/"+binary+"-%s-%s.%s", version, runtime.GOOS, runtime.GOARCH, extension)
+
+	} else {
+		clientURL = fmt.Sprintf("https://github.com/"+org+"/"+repo+"/releases/download/v%s/"+binary+"-%s-%s.%s", version, runtime.GOOS, runtime.GOARCH, extension)
+	}
 	fullPath := filepath.Join(binDir, fileName)
 	if runtime.GOOS == "windows" {
 		fullPath += ".exe"
@@ -1879,11 +1897,12 @@ func (o *CommonOptions) installExternalDNSGKE() error {
 
 	// Create managed zone for external dns if it doesn't exist
 	var nameServers = []string{}
-	err = gke.CreateManagedZone(googleProjectID, o.Domain)
+	gcloud := o.GCloud()
+	err = gcloud.CreateManagedZone(googleProjectID, o.Domain)
 	if err != nil {
 		return errors.Wrap(err, "while trying to creating a CloudDNS managed zone for external-dns")
 	}
-	_, nameServers, err = gke.GetManagedZoneNameServers(googleProjectID, o.Domain)
+	_, nameServers, err = gcloud.GetManagedZoneNameServers(googleProjectID, o.Domain)
 	if err != nil {
 		return errors.Wrap(err, "while trying to retrieve the managed zone name servers for external-dns")
 	}
@@ -1891,13 +1910,13 @@ func (o *CommonOptions) installExternalDNSGKE() error {
 	o.NameServers = nameServers
 
 	var gcpServiceAccountSecretName string
-	gcpServiceAccountSecretName, err = externaldns.CreateExternalDNSGCPServiceAccount(client,
+	gcpServiceAccountSecretName, err = externaldns.CreateExternalDNSGCPServiceAccount(o.GCloud(), client,
 		kube.DefaultExternalDNSReleaseName, devNamespace, clusterName, googleProjectID)
 	if err != nil {
 		return errors.Wrap(err, "failed to create service account for ExternalDNS")
 	}
 
-	err = gke.EnableAPIs(googleProjectID, "dns")
+	err = gcloud.EnableAPIs(googleProjectID, "dns")
 	if err != nil {
 		return errors.Wrap(err, "unable to enable 'dns' api")
 	}

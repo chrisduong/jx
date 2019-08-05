@@ -8,8 +8,6 @@ import (
 
 	"fmt"
 
-	os_user "os/user"
-
 	"strconv"
 
 	"errors"
@@ -17,8 +15,6 @@ import (
 	"path/filepath"
 
 	"os"
-
-	"time"
 
 	"path"
 
@@ -35,174 +31,6 @@ import (
 	"github.com/spf13/cobra"
 	survey "gopkg.in/AlecAivazis/survey.v1"
 )
-
-// Cluster interface for Clusters
-type Cluster interface {
-	Name() string
-	SetName(string) string
-	ClusterName() string
-	Provider() string
-	SetProvider(string) string
-	Context() string
-	CreateTfVarsFile(path string) error
-	Validate() error
-}
-
-// GKECluster implements Cluster interface for GKE
-type GKECluster struct {
-	name           string
-	provider       string
-	Organisation   string
-	ProjectID      string
-	Zone           string
-	MachineType    string
-	Preemptible    bool
-	MinNumOfNodes  string
-	MaxNumOfNodes  string
-	DiskSize       string
-	AutoRepair     bool
-	AutoUpgrade    bool
-	ServiceAccount string
-	DevStorageRole string
-	EnableKaniko   bool
-	EnableVault    bool
-}
-
-const (
-	devStorageFullControl = "https://www.googleapis.com/auth/devstorage.full_control"
-	devStorageReadOnly    = "https://www.googleapis.com/auth/devstorage.read_only"
-)
-
-// Name Get name
-func (g GKECluster) Name() string {
-	return g.name
-}
-
-// SetName Sets the name
-func (g *GKECluster) SetName(name string) string {
-	g.name = name
-	return g.name
-}
-
-// ClusterName get cluster name
-func (g GKECluster) ClusterName() string {
-	return fmt.Sprintf("%s-%s", g.Organisation, g.name)
-}
-
-// Provider get provider
-func (g GKECluster) Provider() string {
-	return g.provider
-}
-
-// SetProvider Set the provider
-func (g *GKECluster) SetProvider(provider string) string {
-	g.provider = provider
-	return g.provider
-}
-
-// Context Get the context
-func (g GKECluster) Context() string {
-	return fmt.Sprintf("%s_%s_%s_%s", "gke", g.ProjectID, g.Zone, g.ClusterName())
-}
-
-// Region Get the region
-func (g GKECluster) Region() string {
-	return gke.GetRegionFromZone(g.Zone)
-}
-
-type terraformFileWriter struct {
-	err error
-}
-
-func (tf *terraformFileWriter) write(path string, key string, value string) {
-	if tf.err != nil {
-		return
-	}
-	tf.err = terraform.WriteKeyValueToFileIfNotExists(path, key, value)
-}
-
-// Validate validates that all args are ok to create a GKE cluster
-func (g GKECluster) Validate() error {
-	if len(g.ClusterName()) >= 27 {
-		return errors.New("cluster name must not be longer than 27 characters - " + g.ClusterName())
-	}
-	return nil
-}
-
-// CreateTfVarsFile create vars
-func (g GKECluster) CreateTfVarsFile(path string) error {
-	user, err := os_user.Current()
-	var username string
-	if err != nil {
-		username = "unknown"
-	} else {
-		username = util.SanitizeLabel(user.Username)
-	}
-
-	tf := terraformFileWriter{}
-	tf.write(path, "created_by", username)
-	tf.write(path, "created_timestamp", time.Now().Format("20060102150405"))
-	tf.write(path, "cluster_name", g.ClusterName())
-	tf.write(path, "organisation", g.Organisation)
-	tf.write(path, "cloud_provider", g.provider)
-	tf.write(path, "gcp_zone", g.Zone)
-	tf.write(path, "gcp_region", g.Region())
-	tf.write(path, "gcp_project", g.ProjectID)
-	tf.write(path, "min_node_count", g.MinNumOfNodes)
-	tf.write(path, "max_node_count", g.MaxNumOfNodes)
-	tf.write(path, "node_machine_type", g.MachineType)
-	tf.write(path, "node_preemptible", strconv.FormatBool(g.Preemptible))
-	tf.write(path, "node_disk_size", g.DiskSize)
-	tf.write(path, "auto_repair", strconv.FormatBool(g.AutoRepair))
-	tf.write(path, "auto_upgrade", strconv.FormatBool(g.AutoUpgrade))
-	tf.write(path, "enable_kubernetes_alpha", "false")
-	tf.write(path, "enable_legacy_abac", "false")
-	tf.write(path, "logging_service", "logging.googleapis.com")
-	tf.write(path, "monitoring_service", "monitoring.googleapis.com")
-	tf.write(path, "node_devstorage_role", g.DevStorageRole)
-	tf.write(path, "enable_kaniko", booleanAsInt(g.EnableKaniko))
-	tf.write(path, "enable_vault", booleanAsInt(g.EnableVault))
-
-	if tf.err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// ParseTfVarsFile Parse vars file
-func (g *GKECluster) ParseTfVarsFile(path string) {
-	g.Zone, _ = terraform.ReadValueFromFile(path, "gcp_zone")
-	// no need to read region as it can be calculated
-	g.Organisation, _ = terraform.ReadValueFromFile(path, "organisation")
-	g.provider, _ = terraform.ReadValueFromFile(path, "cloud_provider")
-	g.ProjectID, _ = terraform.ReadValueFromFile(path, "gcp_project")
-	g.MinNumOfNodes, _ = terraform.ReadValueFromFile(path, "min_node_count")
-	g.MaxNumOfNodes, _ = terraform.ReadValueFromFile(path, "max_node_count")
-	g.MachineType, _ = terraform.ReadValueFromFile(path, "node_machine_type")
-	g.DiskSize, _ = terraform.ReadValueFromFile(path, "node_disk_size")
-	g.DevStorageRole, _ = terraform.ReadValueFromFile(path, "node_devstorage_role")
-
-	preemptible, _ := terraform.ReadValueFromFile(path, "node_preemptible")
-	b, _ := strconv.ParseBool(preemptible)
-	g.Preemptible = b
-
-	autoRepair, _ := terraform.ReadValueFromFile(path, "auto_repair")
-	b, _ = strconv.ParseBool(autoRepair)
-	g.AutoRepair = b
-
-	autoUpgrade, _ := terraform.ReadValueFromFile(path, "auto_upgrade")
-	b, _ = strconv.ParseBool(autoUpgrade)
-	g.AutoUpgrade = b
-
-	enableKaniko, _ := terraform.ReadValueFromFile(path, "enable_kaniko")
-	b, _ = strconv.ParseBool(enableKaniko)
-	g.EnableKaniko = b
-
-	enableVault, _ := terraform.ReadValueFromFile(path, "enable_vault")
-	b, _ = strconv.ParseBool(enableVault)
-	g.EnableVault = b
-}
 
 // Flags for a cluster
 type Flags struct {
@@ -241,8 +69,6 @@ type CreateTerraformOptions struct {
 }
 
 var (
-	validTerraformClusterProviders = []string{"gke", "jx-infra"}
-
 	createTerraformExample = templates.Examples(`
 		jx create terraform
 
@@ -250,23 +76,6 @@ var (
 		jx create terraform -c dev=gke -c stage=gke -c prod=gke
 
 `)
-
-	gkeBucketConfiguration = `terraform {
-  required_version = ">= %s"
-  backend "gcs" {
-    bucket      = "%s-%s-terraform-state"
-    prefix      = "%s"
-  }
-}`
-)
-
-const (
-	// Clusters constant
-	Clusters = "clusters"
-	// Terraform constant
-	Terraform = "terraform"
-	// TerraformTemplatesGKE constant
-	TerraformTemplatesGKE = "https://github.com/jenkins-x/terraform-jx-templates-gke.git"
 )
 
 // NewCmdCreateTerraform creates a command object for the "create" command
@@ -310,6 +119,9 @@ func NewCmdCreateTerraform(commonOpts *opts.CommonOptions) *cobra.Command {
 	cmd.Flags().StringVarP(&options.Flags.GKEServiceAccount, "gke-service-account", "", "", "The service account to use to connect to GKE")
 	cmd.Flags().StringVarP(&options.Flags.ForkOrganisationGitRepo, "fork-git-repo", "f", kube.DefaultOrganisationGitRepoURL, "The Git repository used as the fork when creating new Organisation Git repos")
 
+	// add sub commands
+	cmd.AddCommand(NewCmdCreateTerraformGKE(commonOpts))
+
 	return cmd
 }
 
@@ -339,15 +151,6 @@ func (options *CreateTerraformOptions) addFlags(cmd *cobra.Command, addSharedFla
 	cmd.Flags().StringVarP(&options.Flags.GKEZone, "gke-zone", "", "", "The compute zone (e.g. us-central1-a) for the cluster")
 	cmd.Flags().BoolVarP(&options.Flags.GKEUseEnhancedScopes, "gke-use-enhanced-scopes", "", false, "Use enhanced Oauth scopes for access to GCS/GCR")
 	cmd.Flags().BoolVarP(&options.Flags.GKEUseEnhancedApis, "gke-use-enhanced-apis", "", false, "Enable enhanced APIs to utilise Container Registry & Cloud Build")
-}
-
-func stringInValidProviders(a string) bool {
-	for _, b := range validTerraformClusterProviders {
-		if b == a {
-			return true
-		}
-	}
-	return false
 }
 
 // Run implements this command
@@ -699,7 +502,7 @@ func (options *CreateTerraformOptions) CreateOrganisationFolderStructure(dir str
 				// TODO add eks terraform templates URL
 				return nil, fmt.Errorf("creating an EKS cluster via Terraform is not currently supported")
 			default:
-				return nil, fmt.Errorf("unknown Kubernetes provider type %s must be one of %v", c.Provider(), validTerraformClusterProviders)
+				return nil, fmt.Errorf("unknown Kubernetes provider type '%s' must be one of %v", c.Provider(), validTerraformClusterProviders)
 			}
 			os.RemoveAll(filepath.Join(path, ".git"))
 			os.RemoveAll(filepath.Join(path, ".gitignore"))
@@ -769,7 +572,7 @@ func (options *CreateTerraformOptions) writeGitIgnoreFile(dir string) error {
 		}
 		defer file.Close()
 
-		_, err = file.WriteString("**/*.key.json\n.terraform\n**/*.tfstate\njx\n")
+		_, err = file.WriteString("**/*.json\n.terraform\n**/*.tfstate\njx\n")
 		if err != nil {
 			return err
 		}
@@ -817,7 +620,7 @@ func (options *CreateTerraformOptions) configureGKECluster(g *GKECluster, path s
 	if g.ServiceAccount != "" {
 		log.Logger().Debugf("loading service account for cluster %s", g.Name())
 
-		err := gke.Login(g.ServiceAccount, false)
+		err := options.GCloud().Login(g.ServiceAccount, false)
 		if err != nil {
 			return err
 		}
@@ -836,7 +639,7 @@ func (options *CreateTerraformOptions) configureGKECluster(g *GKECluster, path s
 	if !options.Flags.GKESkipEnableApis {
 		log.Logger().Debugf("enabling apis for %s", g.Name())
 
-		err := gke.EnableAPIs(g.ProjectID, "iam", "compute", "container")
+		err := options.GCloud().EnableAPIs(g.ProjectID, "iam", "compute", "container")
 		if err != nil {
 			return err
 		}
@@ -934,7 +737,7 @@ func (options *CreateTerraformOptions) configureGKECluster(g *GKECluster, path s
 	}
 
 	if options.Flags.GKEUseEnhancedApis {
-		err := gke.EnableAPIs(g.ProjectID, "cloudbuild", "containerregistry", "containeranalysis")
+		err := options.GCloud().EnableAPIs(g.ProjectID, "cloudbuild", "containerregistry", "containeranalysis")
 		if err != nil {
 			return err
 		}
@@ -1034,13 +837,13 @@ func (options *CreateTerraformOptions) applyTerraformGKE(g *GKECluster, path str
 	if g.ServiceAccount == "" {
 		if options.Flags.GKEServiceAccount != "" {
 			g.ServiceAccount = options.Flags.GKEServiceAccount
-			err := gke.Login(g.ServiceAccount, false)
+			err := options.GCloud().Login(g.ServiceAccount, false)
 			if err != nil {
 				return err
 			}
 
 			log.Logger().Debugf("attempting to enable apis")
-			err = gke.EnableAPIs(g.ProjectID, "iam", "compute", "container")
+			err = options.GCloud().EnableAPIs(g.ProjectID, "iam", "compute", "container")
 			if err != nil {
 				return err
 			}
@@ -1052,7 +855,7 @@ func (options *CreateTerraformOptions) applyTerraformGKE(g *GKECluster, path str
 		serviceAccountName := fmt.Sprintf("%s-%s-tf", options.Flags.OrganisationName, g.Name())
 		log.Logger().Infof("No GCP service account provided, creating %s", util.ColorInfo(serviceAccountName))
 
-		_, err := gke.GetOrCreateServiceAccount(serviceAccountName, g.ProjectID, filepath.Dir(path), gke.RequiredServiceAccountRoles)
+		_, err := options.GCloud().GetOrCreateServiceAccount(serviceAccountName, g.ProjectID, filepath.Dir(path), gke.RequiredServiceAccountRoles)
 		if err != nil {
 			return err
 		}
@@ -1065,13 +868,13 @@ func (options *CreateTerraformOptions) applyTerraformGKE(g *GKECluster, path str
 
 	// create the bucket
 	bucketName := fmt.Sprintf("%s-%s-terraform-state", g.ProjectID, options.Flags.OrganisationName)
-	exists, err := gke.BucketExists(g.ProjectID, bucketName)
+	exists, err := options.GCloud().BucketExists(g.ProjectID, bucketName)
 	if err != nil {
 		return err
 	}
 
 	if !exists {
-		err = gke.CreateBucket(g.ProjectID, bucketName, g.Region())
+		err = options.GCloud().CreateBucket(g.ProjectID, bucketName, g.Region())
 		if err != nil {
 			return err
 		}
@@ -1296,11 +1099,4 @@ func (options *CreateTerraformOptions) configureEnvironments(clusters []Cluster)
 		}
 	}
 	return nil
-}
-
-func booleanAsInt(input bool) string {
-	if input {
-		return "1"
-	}
-	return "0"
 }

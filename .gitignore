@@ -22,7 +22,7 @@ debug
 
 #Various temporary created while building/running jx.
 /build/
-release/
+/release/
 dist/
 scanning/
 .updatebot-repos/

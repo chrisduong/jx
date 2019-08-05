@@ -29,14 +29,14 @@ var (
 					`)
 )
 
-// StepCreatePullRequestRepositoriessOptions contains the command line flags
-type StepCreatePullRequestRepositoriessOptions struct {
+// StepCreatePullRequestRepositoriesOptions contains the command line flags
+type StepCreatePullRequestRepositoriesOptions struct {
 	StepCreatePrOptions
 }
 
 // NewCmdStepCreatePullRequestRepositories Creates a new Command object
 func NewCmdStepCreatePullRequestRepositories(commonOpts *opts.CommonOptions) *cobra.Command {
-	options := &StepCreatePullRequestRepositoriessOptions{
+	options := &StepCreatePullRequestRepositoriesOptions{
 		StepCreatePrOptions: StepCreatePrOptions{
 			StepCreateOptions: opts.StepCreateOptions{
 				StepOptions: opts.StepOptions{
@@ -63,17 +63,26 @@ func NewCmdStepCreatePullRequestRepositories(commonOpts *opts.CommonOptions) *co
 	return cmd
 }
 
-// Run implements this command
-func (o *StepCreatePullRequestRepositoriessOptions) Run() error {
-	if o.GitURL == "" {
+// ValidateRepositoriesOptions validates the common options for repositories pr steps
+func (o *StepCreatePullRequestRepositoriesOptions) ValidateRepositoriesOptions() error {
+	if len(o.GitURLs) == 0 {
 		// lets default to the dev environment git repository
 		devEnv, _, err := o.DevEnvAndTeamSettings()
 		if err != nil {
 			return errors.Wrapf(err, "no --repo specified so trying to find the 'dev' Environment to default the repository but cannot find it")
 		}
-		o.GitURL = devEnv.Spec.Source.URL
+		o.GitURLs = []string{devEnv.Spec.Source.URL}
 	}
 	if err := o.ValidateOptions(); err != nil {
+		return errors.WithStack(err)
+	}
+
+	return nil
+}
+
+// Run implements this command
+func (o *StepCreatePullRequestRepositoriesOptions) Run() error {
+	if err := o.ValidateRepositoriesOptions(); err != nil {
 		return errors.WithStack(err)
 	}
 	jxClient, ns, err := o.JXClientAndDevNamespace()
@@ -125,7 +134,7 @@ func (o *StepCreatePullRequestRepositoriessOptions) Run() error {
 }
 
 // emptyObjectMeta lets return a clean ObjectMeta without any cluster or transient specific values
-func (o *StepCreatePullRequestRepositoriessOptions) emptyObjectMeta(md *metav1.ObjectMeta) metav1.ObjectMeta {
+func (o *StepCreatePullRequestRepositoriesOptions) emptyObjectMeta(md *metav1.ObjectMeta) metav1.ObjectMeta {
 	return metav1.ObjectMeta{
 		Name: md.Name,
 	}

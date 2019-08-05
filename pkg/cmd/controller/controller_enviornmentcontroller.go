@@ -30,7 +30,6 @@ import (
 
 	"github.com/jenkins-x/jx/pkg/cmd/templates"
 	"github.com/spf13/cobra"
-	pipelineapi "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -223,8 +222,8 @@ func (o *ControllerEnvironmentOptions) Run() error {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle(HealthPath, http.HandlerFunc(o.health))
-	mux.Handle(ReadyPath, http.HandlerFunc(o.ready))
+	mux.Handle(healthPath, http.HandlerFunc(o.health))
+	mux.Handle(readyPath, http.HandlerFunc(o.ready))
 
 	indexPaths := []string{"/", "/index.html"}
 	for _, p := range indexPaths {
@@ -279,7 +278,6 @@ func (o *ControllerEnvironmentOptions) startPipelineRun(w http.ResponseWriter, r
 	pr.PipelineKind = jenkinsfile.PipelineKindRelease
 	pr.SourceName = "source"
 	pr.Duration = time.Second * 20
-	pr.Trigger = string(pipelineapi.PipelineTriggerTypeManual)
 	pr.CloneGitURL = sourceURL
 	pr.DeleteTempDir = true
 	pr.Branch = branch

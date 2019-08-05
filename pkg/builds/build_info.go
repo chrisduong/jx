@@ -1,13 +1,14 @@
 package builds
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	v1 "github.com/jenkins-x/jx/pkg/apis/jenkins.io/v1"
+	"github.com/jenkins-x/jx/pkg/apis/jenkins.io/v1"
 	"github.com/jenkins-x/jx/pkg/gits"
 	"github.com/jenkins-x/jx/pkg/kube"
 	"github.com/jenkins-x/jx/pkg/log"
@@ -73,7 +74,7 @@ func CreateBuildPodInfo(pod *corev1.Pod) *BuildPodInfo {
 	containers, _, isInit := kube.GetContainersWithStatusAndIsInit(pod)
 
 	for _, container := range containers {
-		if strings.HasPrefix(container.Name, "build-step-git-source") {
+		if strings.HasPrefix(container.Name, "build-step-git-source") || strings.HasPrefix(container.Name, "step-git-source") {
 			_, args := kube.GetCommandAndArgs(&container, isInit)
 			for i := 0; i <= len(args)-2; i += 2 {
 				key := args[i]
@@ -194,6 +195,21 @@ func CreateBuildPodInfo(pod *corev1.Pod) *BuildPodInfo {
 	return answer
 }
 
+// LabelSelectorsForActivity returns a slice of label selectors relevant to PipelineActivity corresponding to the filter
+func (o *BuildPodInfoFilter) LabelSelectorsForActivity() []string {
+	var labelSelectors []string
+	if o.Owner != "" {
+		labelSelectors = append(labelSelectors, fmt.Sprintf("%s=%s", v1.LabelOwner, o.Owner))
+	}
+	if o.Repository != "" {
+		labelSelectors = append(labelSelectors, fmt.Sprintf("%s=%s", v1.LabelRepository, o.Repository))
+	}
+	if o.Branch != "" {
+		labelSelectors = append(labelSelectors, fmt.Sprintf("%s=%s", v1.LabelBranch, o.Branch))
+	}
+	return labelSelectors
+}
+
 // LabelSelectorsForBuild returns a slice of label selectors corresponding to the filter
 func (o *BuildPodInfoFilter) LabelSelectorsForBuild() []string {
 	var labelSelectors []string
@@ -201,13 +217,13 @@ func (o *BuildPodInfoFilter) LabelSelectorsForBuild() []string {
 		labelSelectors = append(labelSelectors, "context="+o.Context)
 	}
 	if o.Owner != "" {
-		labelSelectors = append(labelSelectors, "owner="+o.Owner)
+		labelSelectors = append(labelSelectors, fmt.Sprintf("%s=%s", v1.LabelOwner, o.Owner))
 	}
 	if o.Repository != "" {
-		labelSelectors = append(labelSelectors, "repo="+o.Repository)
+		labelSelectors = append(labelSelectors, fmt.Sprintf("%s=%s", v1.LabelRepository, o.Repository))
 	}
 	if o.Branch != "" {
-		labelSelectors = append(labelSelectors, "branch="+o.Branch)
+		labelSelectors = append(labelSelectors, fmt.Sprintf("%s=%s", v1.LabelBranch, o.Branch))
 	}
 	return labelSelectors
 }

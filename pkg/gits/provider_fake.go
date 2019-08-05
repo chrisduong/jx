@@ -3,6 +3,7 @@ package gits
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -606,6 +607,21 @@ func (f *FakeProvider) UpdateRelease(owner string, repoName string, tag string, 
 	return fmt.Errorf("repository with name '%s' not found", repoName)
 }
 
+// UpdateReleaseStatus updates the status (release/prerelease) of a release
+func (f *FakeProvider) UpdateReleaseStatus(owner string, repoName string, tag string, releaseInfo *GitRelease) error {
+	repos, ok := f.Repositories[owner]
+	if !ok {
+		return fmt.Errorf("organization '%s' not found", owner)
+	}
+
+	for _, repo := range repos {
+		if repo.GitRepo.Name == repoName {
+			repo.Releases[tag] = releaseInfo
+			return nil
+		}
+	}
+	return fmt.Errorf("repository with name '%s' not found", repoName)
+}
 func (f *FakeProvider) ListReleases(org string, name string) ([]*GitRelease, error) {
 	repos, ok := f.Repositories[org]
 	if !ok {
@@ -768,4 +784,23 @@ func (f *FakeProvider) ListCommits(owner, name string, opt *ListCommitsArguments
 // AddLabelsToIssue adds labels to an issue
 func (f *FakeProvider) AddLabelsToIssue(owner, repo string, number int, labels []string) error {
 	return nil
+}
+
+// GetLatestRelease fetches the latest release from the git provider for org and name
+func (f *FakeProvider) GetLatestRelease(org string, name string) (*GitRelease, error) {
+	releases, err := f.ListReleases(org, name)
+	if err != nil {
+		return nil, errors2.WithStack(err)
+	}
+	return releases[len(releases)-1], nil
+}
+
+// UploadReleaseAsset will upload an asset to org/repo to a release with id, giving it a name, it will return the release asset from the git provider
+func (f *FakeProvider) UploadReleaseAsset(org string, repo string, id int64, name string, asset *os.File) (*GitReleaseAsset, error) {
+	return nil, nil
+}
+
+// GetBranch returns the branch information for an owner/repo, including the commit at the tip
+func (f *FakeProvider) GetBranch(owner string, repo string, branch string) (*GitBranch, error) {
+	return nil, nil
 }

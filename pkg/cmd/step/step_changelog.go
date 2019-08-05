@@ -8,9 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"text/template"
 	"time"
+
+	"github.com/jenkins-x/jx/pkg/dependencymatrix"
 
 	"github.com/jenkins-x/jx/pkg/cmd/helper"
 	"github.com/jenkins-x/jx/pkg/kube/naming"
@@ -243,7 +246,7 @@ func (o *StepChangelogOptions) Run() error {
 		}
 	}
 	if previousRev == "" {
-		previousRev, err = o.Git().GetPreviousGitTagSHA(dir)
+		previousRev, _, err = o.Git().GetPreviousGitTagSHA(dir)
 		if err != nil {
 			return err
 		}
@@ -254,7 +257,7 @@ func (o *StepChangelogOptions) Run() error {
 	}
 	currentRev := o.CurrentRevision
 	if currentRev == "" {
-		currentRev, err = o.Git().GetCurrentGitTagSHA(dir)
+		currentRev, _, err = o.Git().GetCurrentGitTagSHA(dir)
 		if err != nil {
 			return err
 		}
@@ -389,6 +392,8 @@ func (o *StepChangelogOptions) Run() error {
 		}
 	}
 
+	release.Spec.DependencyUpdates = CollapseDependencyUpdates(release.Spec.DependencyUpdates)
+
 	// lets try to update the release
 	markdown, err := gits.GenerateMarkdown(&release.Spec, gitInfo)
 	if err != nil {
@@ -407,9 +412,37 @@ func (o *StepChangelogOptions) Run() error {
 	log.Logger().Debugf("Generated release notes:\n\n%s\n", markdown)
 
 	if version != "" && o.UpdateRelease && foundGitProvider {
+		tags, err := o.Git().FilterTags(o.Dir, version)
+		if err != nil {
+			return errors.Wrapf(err, "listing tags with pattern %s in %s", version, o.Dir)
+		}
+		vVersion := fmt.Sprintf("v%s", version)
+		vtags, err := o.Git().FilterTags(o.Dir, vVersion)
+		if err != nil {
+			return errors.Wrapf(err, "listing tags with pattern %s in %s", vVersion, o.Dir)
+		}
+		foundTag := false
+		foundVTag := false
+
+		for _, t := range tags {
+			if t == version {
+				foundTag = true
+				break
+			}
+		}
+		for _, t := range vtags {
+			if t == vVersion {
+				foundVTag = true
+				break
+			}
+		}
+		tagName := version
+		if foundVTag && !foundTag {
+			tagName = vVersion
+		}
 		releaseInfo := &gits.GitRelease{
 			Name:    version,
-			TagName: version,
+			TagName: tagName,
 			Body:    markdown,
 		}
 		url := releaseInfo.HTMLURL
@@ -417,15 +450,60 @@ func (o *StepChangelogOptions) Run() error {
 			url = releaseInfo.URL
 		}
 		if url == "" {
-			url = util.UrlJoin(gitInfo.HttpsURL(), "releases/tag", version)
+			url = util.UrlJoin(gitInfo.HttpsURL(), "releases/tag", tagName)
 		}
-		err = gitProvider.UpdateRelease(gitInfo.Organisation, gitInfo.Name, version, releaseInfo)
+		err = gitProvider.UpdateRelease(gitInfo.Organisation, gitInfo.Name, tagName, releaseInfo)
 		if err != nil {
 			log.Logger().Warnf("Failed to update the release at %s: %s", url, err)
 			return nil
 		}
 		release.Spec.ReleaseNotesURL = url
 		log.Logger().Infof("Updated the release information at %s", util.ColorInfo(url))
+
+		// First, attach the current dependency matrix
+		dependencyMatrixFileName := filepath.Join(dir, dependencymatrix.DependencyMatrixDirName, dependencymatrix.DependencyMatrixYamlFileName)
+		if info, err := os.Stat(dependencyMatrixFileName); err != nil && os.IsNotExist(err) {
+			log.Logger().Debugf("Not adding dependency matrix %s as does not exist", dependencyMatrixFileName)
+		} else if err != nil {
+			return errors.Wrapf(err, "checking if %s exists", dependencyMatrixFileName)
+		} else if info.Size() == 0 {
+			log.Logger().Debugf("Not adding dependency matrix %s as has no content", dependencyMatrixFileName)
+		} else {
+			file, err := os.Open(dependencyMatrixFileName)
+			// The file will be closed by the release asset uploader
+			if err != nil {
+				return errors.Wrapf(err, "opening %s", dependencyMatrixFileName)
+			}
+			releaseAsset, err := gitProvider.UploadReleaseAsset(gitInfo.Organisation, gitInfo.Name, releaseInfo.ID, dependencymatrix.DependencyMatrixAssetName, file)
+			if err != nil {
+				return errors.Wrapf(err, "uploading %s to release %d of %s/%s", dependencyMatrixFileName, releaseInfo.ID, gitInfo.Organisation, gitInfo.Name)
+			}
+			log.Logger().Infof("Uploaded %s to release asset %s", dependencyMatrixFileName, releaseAsset.BrowserDownloadURL)
+		}
+		if len(release.Spec.DependencyUpdates) > 0 {
+			// Now, let's attach any dependency updates that were done as part of this release
+			file, err := ioutil.TempFile("", "")
+			if err != nil {
+				return errors.Wrapf(err, "creating temp file to write dependency updates to")
+			}
+			data := dependencymatrix.DependencyUpdates{
+				Updates: release.Spec.DependencyUpdates,
+			}
+			bytes, err := yaml.Marshal(data)
+			if err != nil {
+				return errors.Wrapf(err, "marshaling %+v to yaml", data)
+			}
+			err = ioutil.WriteFile(file.Name(), bytes, 0600)
+			if err != nil {
+				return errors.Wrapf(err, "writing dependency update yaml to %s", file.Name())
+			}
+			releaseAsset, err := gitProvider.UploadReleaseAsset(gitInfo.Organisation, gitInfo.Name, releaseInfo.ID, dependencymatrix.DependencyUpdatesAssetName, file)
+			if err != nil {
+				return errors.Wrapf(err, "uploading %s to release %d of %s/%s", dependencymatrix.DependencyUpdatesAssetName, releaseInfo.ID, gitInfo.Organisation, gitInfo.Name)
+			}
+			log.Logger().Infof("Uploaded %s to release asset %s", dependencymatrix.DependencyUpdatesAssetName, releaseAsset.BrowserDownloadURL)
+		}
+
 	} else if o.OutputMarkdownFile != "" {
 		err := ioutil.WriteFile(o.OutputMarkdownFile, []byte(markdown), util.DefaultWritePermissions)
 		if err != nil {
@@ -440,6 +518,7 @@ func (o *StepChangelogOptions) Run() error {
 	o.State.Release = release
 	// now lets marshal the release YAML
 	data, err := yaml.Marshal(release)
+
 	if err != nil {
 		return err
 	}
@@ -572,7 +651,7 @@ func (o *StepChangelogOptions) addCommit(spec *v1.ReleaseSpec, commit *object.Co
 	if committer != nil {
 		committerDetails = committer.Spec
 	}
-	dependencyUpdate, err := o.ParseDependencyUpdateMessage(commit.Message, spec.GitCloneURL)
+	dependencyUpdate, upstreamUpdates, err := o.ParseDependencyUpdateMessage(commit.Message, spec.GitCloneURL)
 	if err != nil {
 		log.Logger().Infof("Parsing %s for dependency updates", commit.Message)
 	}
@@ -581,6 +660,11 @@ func (o *StepChangelogOptions) addCommit(spec *v1.ReleaseSpec, commit *object.Co
 			spec.DependencyUpdates = make([]v1.DependencyUpdate, 0)
 		}
 		spec.DependencyUpdates = append(spec.DependencyUpdates, *dependencyUpdate)
+	}
+	if upstreamUpdates != nil {
+		for _, u := range upstreamUpdates.Updates {
+			spec.DependencyUpdates = append(spec.DependencyUpdates, u)
+		}
 	}
 	commitSummary := v1.CommitSummary{
 		Message:   commit.Message,
@@ -762,4 +846,73 @@ func (o *StepChangelogOptions) getTemplateResult(releaseSpec *v1.ReleaseSpec, te
 	err = tmpl.Execute(writer, releaseSpec)
 	writer.Flush()
 	return buffer.String(), err
+}
+
+//CollapseDependencyUpdates takes a raw set of dependencyUpdates, removes duplicates and collapses multiple updates to
+// the same org/repo:components into a sungle update
+func CollapseDependencyUpdates(dependencyUpdates []v1.DependencyUpdate) []v1.DependencyUpdate {
+	// Sort the dependency updates. This makes the outputs more readable, and it also allows us to more easily do duplicate removal and collapsing
+
+	sort.Slice(dependencyUpdates, func(i, j int) bool {
+		if dependencyUpdates[i].Owner == dependencyUpdates[j].Owner {
+			if dependencyUpdates[i].Repo == dependencyUpdates[j].Repo {
+				if dependencyUpdates[i].Component == dependencyUpdates[j].Component {
+					if dependencyUpdates[i].FromVersion == dependencyUpdates[j].FromVersion {
+						return dependencyUpdates[i].ToVersion < dependencyUpdates[j].ToVersion
+					}
+					return dependencyUpdates[i].FromVersion < dependencyUpdates[j].FromVersion
+				}
+				return dependencyUpdates[i].Component < dependencyUpdates[j].Component
+			}
+			return dependencyUpdates[i].Repo < dependencyUpdates[j].Repo
+		}
+		return dependencyUpdates[i].Owner < dependencyUpdates[j].Owner
+	})
+
+	// Collapse  entries
+	collapsed := make([]v1.DependencyUpdate, 0)
+
+	if len(dependencyUpdates) > 0 {
+		start := dependencyUpdates[0]
+
+		end := v1.DependencyUpdate{}
+		for _, u := range dependencyUpdates {
+			if start.Owner != u.Owner || start.Repo != u.Repo || start.Component != u.Component {
+				collapsed = append(collapsed, v1.DependencyUpdate{
+					DependencyUpdateDetails: v1.DependencyUpdateDetails{
+						Owner:              start.Owner,
+						Repo:               start.Repo,
+						Component:          start.Component,
+						URL:                start.URL,
+						Host:               start.Host,
+						FromVersion:        start.FromVersion,
+						FromReleaseHTMLURL: start.FromReleaseHTMLURL,
+						FromReleaseName:    start.FromReleaseName,
+						ToVersion:          end.ToVersion,
+						ToReleaseName:      end.ToReleaseName,
+						ToReleaseHTMLURL:   end.ToReleaseHTMLURL,
+					},
+				})
+				start = u
+			} else {
+				end = u
+			}
+		}
+		collapsed = append(collapsed, v1.DependencyUpdate{
+			DependencyUpdateDetails: v1.DependencyUpdateDetails{
+				Owner:              start.Owner,
+				Repo:               start.Repo,
+				Component:          start.Component,
+				URL:                start.URL,
+				Host:               start.Host,
+				FromVersion:        start.FromVersion,
+				FromReleaseHTMLURL: start.FromReleaseHTMLURL,
+				FromReleaseName:    start.FromReleaseName,
+				ToVersion:          end.ToVersion,
+				ToReleaseName:      end.ToReleaseName,
+				ToReleaseHTMLURL:   end.ToReleaseHTMLURL,
+			},
+		})
+	}
+	return collapsed
 }

@@ -9,7 +9,10 @@ import (
 	"time"
 
 	"github.com/jenkins-x/jx/pkg/cmd/helper"
+	"github.com/jenkins-x/jx/pkg/cmd/step/create"
 	"github.com/jenkins-x/jx/pkg/jenkins"
+	"github.com/jenkins-x/jx/pkg/kube"
+	errors2 "github.com/pkg/errors"
 
 	gojenkins "github.com/jenkins-x/golang-jenkins"
 	"github.com/jenkins-x/jx/pkg/prow"
@@ -31,6 +34,7 @@ const (
 	repoNameEnv    = "REPO_NAME"
 	jmbrBranchName = "BRANCH_NAME"
 	jmbrSourceURL  = "SOURCE_URL"
+	pullPullSha    = "PULL_PULL_SHA"
 )
 
 // StartPipelineOptions contains the command line options
@@ -45,6 +49,11 @@ type StartPipelineOptions struct {
 	Jobs map[string]gojenkins.Job
 
 	ProwOptions prow.Options
+
+	// meta pipeline options
+	Context      string
+	CustomLabels []string
+	CustomEnvs   []string
 }
 
 var (
@@ -86,6 +95,11 @@ func NewCmdStartPipeline(commonOpts *opts.CommonOptions) *cobra.Command {
 	}
 	cmd.Flags().BoolVarP(&options.Tail, "tail", "t", false, "Tails the build log to the current terminal")
 	cmd.Flags().StringVarP(&options.Filter, "filter", "f", "", "Filters all the available jobs by those that contain the given text")
+	cmd.Flags().StringVarP(&options.Context, "context", "c", "", "An optional Prow pipeline context")
+	cmd.Flags().StringVar(&options.ServiceAccount, "service-account", "tekton-bot", "The Kubernetes ServiceAccount to use to run the meta pipeline")
+	cmd.Flags().StringArrayVarP(&options.CustomLabels, "label", "l", nil, "List of custom labels to be applied to the generated PipelineRun (can be use multiple times)")
+	cmd.Flags().StringArrayVarP(&options.CustomEnvs, "env", "e", nil, "List of custom environment variables to be applied to the generated PipelineRun that are created (can be use multiple times)")
+
 	options.JenkinsSelector.AddFlags(cmd)
 
 	return cmd
@@ -102,10 +116,13 @@ func (o *StartPipelineOptions) Run() error {
 		return err
 	}
 
-	isProw, err := o.IsProw()
+	devEnv, _, err := o.DevEnvAndTeamSettings()
 	if err != nil {
 		return err
 	}
+
+	isProw := devEnv.Spec.IsProwOrLighthouse()
+
 	args := o.Args
 	names := []string{}
 	o.ProwOptions = prow.Options{
@@ -115,24 +132,25 @@ func (o *StartPipelineOptions) Run() error {
 	if o.JenkinsSelector.IsCustom() {
 		isProw = false
 	}
-	if len(args) == 0 {
-		if isProw {
-			names, err = o.ProwOptions.GetReleaseJobs()
-			if err != nil {
-				return err
-			}
-			names = util.StringsContaining(names, o.Filter)
-		} else {
-			jobMap, err := o.GetJenkinsJobs(&o.JenkinsSelector, o.Filter)
-			if err != nil {
-				return err
-			}
-			o.Jobs = jobMap
-
-			for k := range o.Jobs {
-				names = append(names, k)
-			}
+	if isProw {
+		names, err = o.ProwOptions.GetReleaseJobs()
+		if err != nil {
+			return err
 		}
+		names = util.StringsContaining(names, o.Filter)
+	} else {
+		jobMap, err := o.GetJenkinsJobs(&o.JenkinsSelector, o.Filter)
+		if err != nil {
+			return err
+		}
+		o.Jobs = jobMap
+
+		for k := range o.Jobs {
+			names = append(names, k)
+		}
+	}
+
+	if len(args) == 0 {
 		if len(names) == 0 {
 			return errors.New("no jobs found to trigger")
 		}
@@ -152,7 +170,12 @@ func (o *StartPipelineOptions) Run() error {
 		args = []string{name}
 	}
 	for _, a := range args {
-		if isProw {
+		if devEnv.Spec.IsLighthouse() {
+			err = o.createMetaPipeline(a)
+			if err != nil {
+				return err
+			}
+		} else if isProw {
 			err = o.createProwJob(a)
 			if err != nil {
 				return err
@@ -163,6 +186,52 @@ func (o *StartPipelineOptions) Run() error {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func (o *StartPipelineOptions) createMetaPipeline(jobname string) error {
+	parts := strings.Split(jobname, "/")
+	if len(parts) != 3 {
+		return fmt.Errorf("job name [%s] does not match org/repo/branch format", jobname)
+	}
+	owner := parts[0]
+	repo := parts[1]
+	branch := parts[2]
+	pullRefs := branch + ":"
+
+	jxClient, ns, err := o.JXClientAndDevNamespace()
+	if err != nil {
+		return errors2.Wrap(err, "failed to create JX client")
+	}
+
+	sr, err := kube.FindSourceRepository(jxClient, ns, owner, repo)
+	if err != nil {
+		return errors2.Wrap(err, "cannot determine git source URL")
+	}
+
+	sourceURL, err := kube.GetRepositoryGitURL(sr)
+	if err != nil {
+		return errors2.Wrapf(err, "cannot generate the git URL from SourceRepository %s", sr.Name)
+	}
+	if sourceURL == "" {
+		return fmt.Errorf("no git URL returned from SourceRepository %s", sr.Name)
+	}
+
+	po := create.StepCreatePipelineOptions{
+		SourceURL:    sourceURL,
+		Job:          jobname,
+		PullRefs:     pullRefs,
+		Context:      o.Context,
+		CustomLabels: o.CustomLabels,
+		CustomEnvs:   o.CustomEnvs,
+	}
+	po.CommonOptions = o.CommonOptions
+	po.ServiceAccount = o.ServiceAccount
+
+	err = po.Run()
+	if err != nil {
+		return errors2.Wrapf(err, "failed to create Jenkins X Pipeline for git URL %s pullRefs: %s", sourceURL, pullRefs)
 	}
 	return nil
 }
@@ -202,6 +271,7 @@ func (o *StartPipelineOptions) createProwJob(jobname string) error {
 			Revision: branch,
 		},
 	}
+
 	if jobSpec.BuildSpec != nil {
 		jobSpec.BuildSpec.Source = sourceSpec
 		env := map[string]string{}
@@ -238,6 +308,25 @@ func (o *StartPipelineOptions) createProwJob(jobname string) error {
 				jobSpec.BuildSpec.Template.Env = append(jobSpec.BuildSpec.Template.Env, e)
 			}
 		}
+	} else {
+		provider, _, err := o.CreateGitProviderForURLWithoutKind(sourceURL)
+		if err != nil {
+			return errors2.Wrapf(err, "creating git provider for %s", sourceURL)
+		}
+		gitBranch, err := provider.GetBranch(org, repo, branch)
+		if err != nil {
+			return errors2.Wrapf(err, "getting branch %s on %s/%s", branch, org, repo)
+		}
+
+		if gitBranch != nil && gitBranch.Commit != nil {
+			if jobSpec.Refs == nil {
+				jobSpec.Refs = &prowjobv1.Refs{}
+			}
+			jobSpec.Refs.BaseSHA = gitBranch.Commit.SHA
+			jobSpec.Refs.Repo = repo
+			jobSpec.Refs.Org = org
+			jobSpec.Refs.BaseRef = branch
+		}
 	}
 
 	p := prow.NewProwJob(jobSpec, nil)
@@ -248,6 +337,19 @@ func (o *StartPipelineOptions) createProwJob(jobname string) error {
 		BaseRef: branch,
 		Org:     org,
 		Repo:    repo,
+	}
+
+	provider, _, err := o.CreateGitProviderForURLWithoutKind(sourceURL)
+	if err != nil {
+		return errors2.Wrapf(err, "creating git provider for %s", sourceURL)
+	}
+	gitBranch, err := provider.GetBranch(org, repo, branch)
+	if err != nil {
+		return errors2.Wrapf(err, "getting branch %s on %s/%s", branch, org, repo)
+	}
+
+	if gitBranch != nil && gitBranch.Commit != nil {
+		p.Spec.Refs.BaseSHA = gitBranch.Commit.SHA
 	}
 
 	client, currentNamespace, err := o.KubeClientAndNamespace()

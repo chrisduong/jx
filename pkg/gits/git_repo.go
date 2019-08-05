@@ -23,13 +23,14 @@ type CreateRepoData struct {
 }
 
 type GitRepositoryOptions struct {
-	ServerURL  string
-	ServerKind string
-	Username   string
-	ApiToken   string
-	Owner      string
-	RepoName   string
-	Private    bool
+	ServerURL                string
+	ServerKind               string
+	Username                 string
+	ApiToken                 string
+	Owner                    string
+	RepoName                 string
+	Private                  bool
+	IgnoreExistingRepository bool
 }
 
 // GetRepository returns the repository if it already exists
@@ -82,6 +83,7 @@ func PickNewOrExistingGitRepository(batchMode bool, authConfigSvc auth.ConfigSer
 	if userAuth == nil {
 		if repoOptions.Username != "" {
 			userAuth = config.GetOrCreateUserAuth(url, repoOptions.Username)
+			log.Logger().Infof(util.QuestionAnswer("Using Git user name", repoOptions.Username))
 		} else {
 			if batchMode {
 				if len(server.Users) == 0 {
@@ -139,18 +141,30 @@ func PickNewOrExistingGitRepository(batchMode bool, authConfigSvc auth.ConfigSer
 	if err != nil {
 		return nil, err
 	}
+
 	owner := repoOptions.Owner
 	if owner == "" {
 		owner, err = GetOwner(batchMode, provider, gitUsername, in, out, errOut)
 		if err != nil {
 			return nil, err
 		}
+	} else {
+		log.Logger().Infof(util.QuestionAnswer("Using organisation", owner))
 	}
+
 	repoName := repoOptions.RepoName
 	if repoName == "" {
 		repoName, err = GetRepoName(batchMode, allowExistingRepo, provider, defaultRepoName, owner, in, out, errOut)
 		if err != nil {
 			return nil, err
+		}
+	} else {
+		if !repoOptions.IgnoreExistingRepository {
+			err := provider.ValidateRepositoryName(owner, repoName)
+			if err != nil {
+				return nil, err
+			}
+			log.Logger().Infof(util.QuestionAnswer("Using repository", repoName))
 		}
 	}
 

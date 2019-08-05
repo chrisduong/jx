@@ -58,6 +58,7 @@ type GitPullRequest struct {
 	RequestedReviewers []*GitUser
 	Labels             []*Label
 	UpdatedAt          *time.Time
+	HeadOwner          *string // HeadOwner is the string the PR is created from
 }
 
 // Label represents a label on an Issue
@@ -119,9 +120,11 @@ type GitUser struct {
 }
 
 type GitRelease struct {
+	ID            int64
 	Name          string
 	TagName       string
 	Body          string
+	PreRelease    bool
 	URL           string
 	HTMLURL       string
 	DownloadCount int
@@ -130,6 +133,7 @@ type GitRelease struct {
 
 // GitReleaseAsset represents a release stored in Git
 type GitReleaseAsset struct {
+	ID                 int64
 	BrowserDownloadURL string
 	Name               string
 	ContentType        string
@@ -193,6 +197,13 @@ type GitFileContent struct {
 	DownloadUrl string
 }
 
+// GitBranch is info on a git branch including the commit at the tip
+type GitBranch struct {
+	Name      string
+	Commit    *GitCommit
+	Protected bool
+}
+
 // PullRequestInfo describes a pull request that has been created
 type PullRequestInfo struct {
 	GitProvider          GitProvider
@@ -212,6 +223,21 @@ func (pr *GitPullRequest) NumberString() string {
 		return ""
 	}
 	return "#" + strconv.Itoa(*n)
+}
+
+// ShortSha returns short SHA of the commit.
+func (c *GitCommit) ShortSha() string {
+	shortLen := 9
+	if len(c.SHA) < shortLen+1 {
+		return c.SHA
+	}
+	return c.SHA[:shortLen]
+}
+
+// Subject returns the subject line of the commit message.
+func (c *GitCommit) Subject() string {
+	lines := strings.Split(c.Message, "\n")
+	return lines[0]
 }
 
 func CreateProvider(server *auth.AuthServer, user *auth.UserAuth, git Gitter) (GitProvider, error) {

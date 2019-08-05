@@ -140,9 +140,16 @@ const (
 type WebHookEngineType string
 
 const (
-	WebHookEngineNone    WebHookEngineType = ""
+	// WebHookEngineNone indicates no webhook being configured
+	WebHookEngineNone WebHookEngineType = ""
+	// WebHookEngineJenkins specifies that we use jenkins webhooks
 	WebHookEngineJenkins WebHookEngineType = "Jenkins"
-	WebHookEngineProw    WebHookEngineType = "Prow"
+	// WebHookEngineProw specifies that we use prow for webhooks
+	// see: https://github.com/kubernetes/test-infra/tree/master/prow
+	WebHookEngineProw WebHookEngineType = "Prow"
+	// WebHookEngineLighthouse specifies that we use lighthouse for webhooks
+	// see: https://github.com/jenkins-x/lighthouse
+	WebHookEngineLighthouse WebHookEngineType = "Lighthouse"
 )
 
 // IsPermanent returns true if this environment is permanent
@@ -391,7 +398,7 @@ func (t *TeamSettings) DefaultMissingValues() {
 
 	// lets invoke the getters to lazily populate any missing values
 	t.GetProwConfig()
-	t.GetProwConfig()
+	t.GetProwEngine()
 	t.GetImportMode()
 }
 
@@ -403,12 +410,24 @@ func (t *TeamSettings) IsJenkinsXPipelines() bool {
 // IsSchedulerMode returns true if we setup Prow configuration via the Scheduler CRDs
 // rather than directly modifying the Prow ConfigMaps directly
 func (t *TeamSettings) IsSchedulerMode() bool {
-	return t.IsProw() && t.GetProwEngine() == ProwEngineTypeTekton
+	return t.IsProw() && t.GetProwConfig() == ProwConfigScheduler
 }
 
 // IsProw returns true if using Prow
 func (t *TeamSettings) IsProw() bool {
 	return t.PromotionEngine == PromotionEngineProw
+}
+
+// IsProwOrLighthouse returns true if either Prow or Lighthouse is being used.
+// e.g. using the Prow based configuration model
+func (e *EnvironmentSpec) IsProwOrLighthouse() bool {
+	w := e.WebHookEngine
+	return w == WebHookEngineProw || w == WebHookEngineLighthouse
+}
+
+// IsLighthouse returns true if we are using lighthouse as the webhook handler
+func (e *EnvironmentSpec) IsLighthouse() bool {
+	return e.WebHookEngine == WebHookEngineLighthouse
 }
 
 // IsEmpty returns true if the storage location is empty

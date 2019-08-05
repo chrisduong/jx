@@ -3,11 +3,14 @@ package verify
 import (
 	"time"
 
-	"github.com/cloudflare/cfssl/log"
+	"github.com/jenkins-x/jx/pkg/cloud"
 	"github.com/jenkins-x/jx/pkg/cmd/helper"
 	"github.com/jenkins-x/jx/pkg/cmd/opts"
 	"github.com/jenkins-x/jx/pkg/config"
+	"github.com/jenkins-x/jx/pkg/kube"
+	"github.com/jenkins-x/jx/pkg/log"
 	"github.com/jenkins-x/jx/pkg/util"
+	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -32,7 +35,8 @@ func NewCmdStepVerifyInstall(commonOpts *opts.CommonOptions) *cobra.Command {
 	}
 
 	cmd := &cobra.Command{
-		Use: "install",
+		Use:   "install",
+		Short: "Verifies that an installation is setup correctly",
 		Run: func(cmd *cobra.Command, args []string) {
 			options.Cmd = cmd
 			options.Args = args
@@ -55,14 +59,14 @@ func (o *StepVerifyInstallOptions) Run() error {
 	}
 	o.SetDevNamespace(ns)
 
-	log.Infof("verifying the Jenkins X installation in namespace %s\n", util.ColorInfo(ns))
+	log.Logger().Infof("verifying the Jenkins X installation in namespace %s\n", util.ColorInfo(ns))
 
 	po := &StepVerifyPodReadyOptions{}
 	po.StepOptions = o.StepOptions
 	po.Debug = o.Debug
 	po.WaitDuration = o.PodWaitDuration
 
-	log.Info("verifying pods\n")
+	log.Logger().Info("verifying pods\n")
 	err = po.Run()
 	if err != nil {
 		return err
@@ -79,12 +83,28 @@ func (o *StepVerifyInstallOptions) Run() error {
 	if err != nil {
 		return err
 	}
+	kubeClient, err := o.KubeClient()
+	if err != nil {
+		return err
+	}
+	installValues, err := kube.ReadInstallValues(kubeClient, ns)
+	if err != nil {
+		return errors.Wrapf(err, "failed to read install values from namespace %s", ns)
+	}
+	provider := installValues[kube.KubeProvider]
+	if provider == "" {
+		log.Logger().Warnf("no %s in the ConfigMap %s. Has values %#v\n", kube.KubeProvider, kube.ConfigMapNameJXInstallConfig, installValues)
+		provider = requirements.Cluster.Provider
+	}
+
 	if requirements.Kaniko {
-		err = o.validateKaniko(ns)
-		if err != nil {
-			return err
+		if provider == cloud.GKE {
+			err = o.validateKaniko(ns)
+			if err != nil {
+				return err
+			}
 		}
 	}
-	log.Infof("installation looks good!\n")
+	log.Logger().Infof("installation is currently looking: %s\n", util.ColorInfo("GOOD"))
 	return nil
 }

@@ -1,10 +1,18 @@
 package pr
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"io/ioutil"
+	"net/http"
 	"os"
+	"sort"
 	"strings"
+
+	"github.com/blang/semver"
+
+	"github.com/ghodss/yaml"
 
 	"github.com/jenkins-x/jx/pkg/dependencymatrix"
 
@@ -29,12 +37,13 @@ type StepCreatePrOptions struct {
 	Results     *gits.PullRequestInfo
 	ConfigGitFn gits.ConfigureGitFn
 	BranchName  string
-	GitURL      string
+	GitURLs     []string
 	Base        string
 	Fork        bool
 	SrcGitURL   string
 	Component   string
 	Version     string
+	DryRun      bool
 }
 
 // NewCmdStepCreatePr Steps a command object for the "step" command
@@ -58,11 +67,13 @@ func NewCmdStepCreatePr(commonOpts *opts.CommonOptions) *cobra.Command {
 			helper.CheckErr(err)
 		},
 	}
+	cmd.AddCommand(NewCmdStepCreatePullRequestBrew(commonOpts))
 	cmd.AddCommand(NewCmdStepCreatePullRequestDocker(commonOpts))
 	cmd.AddCommand(NewCmdStepCreatePullRequestChart(commonOpts))
 	cmd.AddCommand(NewCmdStepCreatePullRequestRegex(commonOpts))
 	cmd.AddCommand(NewCmdStepCreatePullRequestRepositories(commonOpts))
 	cmd.AddCommand(NewCmdStepCreateVersionPullRequest(commonOpts))
+	cmd.AddCommand(NewCmdStepCreatePullRequestMake(commonOpts))
 	return cmd
 }
 
@@ -73,13 +84,13 @@ func (o *StepCreatePrOptions) Run() error {
 
 //AddStepCreatePrFlags adds the common flags for all PR creation steps to the cmd and stores them in o
 func AddStepCreatePrFlags(cmd *cobra.Command, o *StepCreatePrOptions) {
-	cmd.Flags().StringVarP(&o.GitURL, "repo", "r", "", "Git repo")
+	cmd.Flags().StringArrayVarP(&o.GitURLs, "repo", "r", []string{}, "Git repo update")
 	cmd.Flags().StringVarP(&o.BranchName, "branch", "", "master", "Branch to clone and generate a pull request from")
 	cmd.Flags().StringVarP(&o.Base, "base", "", "master", "The branch to create the pull request into")
-	cmd.Flags().StringVarP(&o.SrcGitURL, "srcRepo", "", "", "The git repo which caused this change; if this is a dependency update this will cause commit messages to be generated which can be parsed by jx step changelog. By default this will be read from the environment variable REPO_URL")
+	cmd.Flags().StringVarP(&o.SrcGitURL, "src-repo", "", "", "The git repo which caused this change; if this is a dependency update this will cause commit messages to be generated which can be parsed by jx step changelog. By default this will be read from the environment variable REPO_URL")
 	cmd.Flags().StringVarP(&o.Component, "component", "", "", "The component of the git repo which caused this change; useful if you have a complex or monorepo setup and want to differentiate between different components from the same repo")
 	cmd.Flags().StringVarP(&o.Version, "version", "v", "", "The version to change. If no version is supplied the latest version is found")
-
+	cmd.Flags().BoolVarP(&o.DryRun, "dry-run", "", false, "Perform a dry run, the change will be generated and committed, but not pushed or have a PR created")
 }
 
 // ValidateOptions validates the common options for all PR creation steps
@@ -104,7 +115,13 @@ func (o *StepCreatePrOptions) ValidateOptions() error {
 		}
 
 	}
-	if o.GitURL == "" {
+	if o.SrcGitURL == "" {
+		return errors.Errorf("unable to determine source url, no argument provided, env var REPO_URL is empty and working directory is not a git repo")
+	}
+	if o.Version == "" {
+		return util.MissingOption("version")
+	}
+	if len(o.GitURLs) == 0 {
 		return util.MissingOption("repo")
 	}
 	return nil
@@ -113,67 +130,198 @@ func (o *StepCreatePrOptions) ValidateOptions() error {
 // CreatePullRequest will fork (if needed) and pull a git repo, then perform the update, and finally create or update a
 // PR for the change. Any open PR on the repo with the `updatebot` label will be updated.
 func (o *StepCreatePrOptions) CreatePullRequest(kind string, update func(dir string, gitInfo *gits.GitRepository) ([]string, error)) error {
-	dir, err := ioutil.TempDir("", "create-pr")
-	if err != nil {
-		return err
+	if o.DryRun {
+		log.Logger().Infof("--dry-run specified. Change will be created and committed to local git repo, but not pushed. No pull request will be created or updated. A fork will still be created.")
 	}
+	for _, gitURL := range o.GitURLs {
+		dir, err := ioutil.TempDir("", "create-pr")
+		if err != nil {
+			return err
+		}
+		provider, _, err := o.CreateGitProviderForURLWithoutKind(gitURL)
+		if err != nil {
+			return errors.Wrapf(err, "creating git provider for directory %s", dir)
+		}
 
-	provider, _, err := o.CreateGitProviderForURLWithoutKind(o.GitURL)
-	if err != nil {
-		return errors.Wrapf(err, "creating git provider for directory %s", dir)
-	}
+		dir, _, gitInfo, err := gits.ForkAndPullPullRepo(gitURL, dir, o.Base, o.BranchName, provider, o.Git(), o.ConfigGitFn)
+		if err != nil {
+			return errors.Wrapf(err, "failed to fork and pull %s", o.GitURLs)
+		}
 
-	dir, _, gitInfo, err := gits.ForkAndPullPullRepo(o.GitURL, dir, o.Base, o.BranchName, provider, o.Git(), o.ConfigGitFn)
-	if err != nil {
-		return errors.Wrapf(err, "failed to fork and pull %s", o.GitURL)
-	}
+		oldVersions, err := update(dir, gitInfo)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		nonSemantic := make([]string, 0)
+		semantic := make([]semver.Version, 0)
+		for _, v := range oldVersions {
+			sv, err := semver.Parse(v)
+			if err != nil {
+				nonSemantic = append(nonSemantic, v)
+			} else {
+				semantic = append(semantic, sv)
+			}
+		}
+		semver.Sort(semantic)
+		sort.Strings(nonSemantic)
+		dedupedSemantic := make([]string, 0)
+		dedupedNonSemantic := make([]string, 0)
+		previous := ""
+		for _, v := range nonSemantic {
+			if v != previous {
+				dedupedNonSemantic = append(dedupedNonSemantic, v)
+			}
+			previous = v
+		}
+		previous = ""
+		for _, v := range semantic {
+			vStr := v.String()
+			if vStr != previous {
+				dedupedSemantic = append(dedupedSemantic, vStr)
+			}
+			previous = vStr
+		}
 
-	oldVersions, err := update(dir, gitInfo)
-	if err != nil {
-		return errors.WithStack(err)
-	}
+		oldVersionsStr := strings.Join(dedupedSemantic, ", ")
+		if len(dedupedNonSemantic) > 0 {
+			oldVersionsStr = oldVersionsStr + fmt.Sprintf(" and %s", strings.Join(dedupedNonSemantic, ", "))
+		}
 
-	commitMessage, details, updateDependency, err := o.CreateDependencyUpdatePRDetails(kind, o.SrcGitURL, gitInfo, strings.Join(oldVersions, ", "), o.Version, o.Component)
-	if err != nil {
-		return errors.WithStack(err)
-	}
+		commitMessage, details, updateDependency, assets, err := o.CreateDependencyUpdatePRDetails(kind, o.SrcGitURL, gitInfo, oldVersionsStr, o.Version, o.Component)
+		if err != nil {
+			return errors.WithStack(err)
+		}
 
-	err = dependencymatrix.UpdateDependencyMatrix(dir, updateDependency)
-	if err != nil {
-		return errors.WithStack(err)
-	}
+		var upstreamDependencyAsset *gits.GitReleaseAsset
 
-	filter := &gits.PullRequestFilter{
-		Labels: []string{
-			"updatebot",
-		},
-	}
-	o.Results, err = gits.PushRepoAndCreatePullRequest(dir, gitInfo, o.Base, details, filter, true, commitMessage, true, true, provider, o.Git())
-	if err != nil {
-		return errors.Wrapf(err, "failed to create PR for base %s and head branch %s", o.Base, details.BranchName)
+		for _, asset := range assets {
+			if asset.Name == dependencymatrix.DependencyUpdatesAssetName {
+				upstreamDependencyAsset = &asset
+				break
+			}
+		}
+
+		err = dependencymatrix.UpdateDependencyMatrix(dir, updateDependency)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		if upstreamDependencyAsset != nil {
+			var upstreamUpdates dependencymatrix.DependencyUpdates
+			resp, err := http.Get(upstreamDependencyAsset.BrowserDownloadURL)
+			if err != nil {
+				return errors.Wrapf(err, "retrieving dependency updates from %s", upstreamDependencyAsset.BrowserDownloadURL)
+			}
+			defer resp.Body.Close()
+
+			// Write the body
+			var b bytes.Buffer
+			_, err = io.Copy(&b, resp.Body)
+			if err != nil {
+				return errors.Wrapf(err, "retrieving dependency updates from %s", upstreamDependencyAsset.BrowserDownloadURL)
+			}
+			err = yaml.Unmarshal(b.Bytes(), &upstreamUpdates)
+			if err != nil {
+				return errors.Wrapf(err, "unmarshaling dependency updates from %s", upstreamDependencyAsset.BrowserDownloadURL)
+			}
+			for _, d := range upstreamUpdates.Updates {
+				// Need to prepend a path element
+				if d.Paths == nil {
+					d.Paths = []v1.DependencyUpdatePath{
+						{
+							{
+								Host:               updateDependency.Host,
+								Owner:              updateDependency.Owner,
+								Repo:               updateDependency.Repo,
+								URL:                updateDependency.URL,
+								Component:          updateDependency.Component,
+								ToReleaseHTMLURL:   updateDependency.ToReleaseHTMLURL,
+								ToVersion:          updateDependency.ToVersion,
+								FromVersion:        updateDependency.FromVersion,
+								FromReleaseName:    updateDependency.FromReleaseName,
+								FromReleaseHTMLURL: updateDependency.FromReleaseHTMLURL,
+								ToReleaseName:      updateDependency.ToReleaseName,
+							},
+						},
+					}
+				} else {
+					for j, e := range d.Paths {
+						if e == nil {
+							d.Paths[j] = v1.DependencyUpdatePath{
+								{
+									Host:               updateDependency.Host,
+									Owner:              updateDependency.Owner,
+									Repo:               updateDependency.Repo,
+									URL:                updateDependency.URL,
+									Component:          updateDependency.Component,
+									ToReleaseHTMLURL:   updateDependency.ToReleaseHTMLURL,
+									ToVersion:          updateDependency.ToVersion,
+									FromVersion:        updateDependency.FromVersion,
+									FromReleaseName:    updateDependency.FromReleaseName,
+									FromReleaseHTMLURL: updateDependency.FromReleaseHTMLURL,
+									ToReleaseName:      updateDependency.ToReleaseName,
+								},
+							}
+						}
+						d.Paths[j] = append([]v1.DependencyUpdateDetails{
+							{
+								Host:               updateDependency.Host,
+								Owner:              updateDependency.Owner,
+								Repo:               updateDependency.Repo,
+								URL:                updateDependency.URL,
+								Component:          updateDependency.Component,
+								ToReleaseHTMLURL:   updateDependency.ToReleaseHTMLURL,
+								ToVersion:          updateDependency.ToVersion,
+								FromVersion:        updateDependency.FromVersion,
+								FromReleaseName:    updateDependency.FromReleaseName,
+								FromReleaseHTMLURL: updateDependency.FromReleaseHTMLURL,
+								ToReleaseName:      updateDependency.ToReleaseName,
+							},
+						}, e...)
+					}
+				}
+				err := dependencymatrix.UpdateDependencyMatrix(dir, &d)
+				if err != nil {
+					return errors.Wrapf(err, "updating dependency matrix with upstream dependency %+v", d)
+				}
+			}
+		}
+
+		filter := &gits.PullRequestFilter{
+			Labels: []string{
+				"updatebot",
+			},
+		}
+		o.Results, err = gits.PushRepoAndCreatePullRequest(dir, gitInfo, o.Base, details, filter, true, commitMessage, true, true, o.DryRun, o.Git(), provider)
+		if err != nil {
+			return errors.Wrapf(err, "failed to create PR for base %s and head branch %s from temp dir %s", o.Base, details.BranchName, dir)
+		}
 	}
 	return nil
 }
 
 // CreateDependencyUpdatePRDetails creates the PullRequestDetails for a pull request, taking the kind of change it is (an id)
 // the srcRepoUrl for the repo that caused the change, the destRepo for the repo receiving the change, the fromVersion and the toVersion
-func (o *StepCreatePrOptions) CreateDependencyUpdatePRDetails(kind string, srcRepoURL string, destRepo *gits.GitRepository, fromVersion string, toVersion string, component string) (string, *gits.PullRequestDetails, *v1.DependencyUpdate, error) {
+func (o *StepCreatePrOptions) CreateDependencyUpdatePRDetails(kind string, srcRepoURL string, destRepo *gits.GitRepository, fromVersion string, toVersion string, component string) (string, *gits.PullRequestDetails, *v1.DependencyUpdate, []gits.GitReleaseAsset, error) {
 
 	var commitMessage, title, message strings.Builder
-	commitMessage.WriteString("chore(dependencies): update ")
-	title.WriteString("chore(dependencies): update ")
+	commitMessage.WriteString("chore(deps): bump ")
+	title.WriteString("chore(deps): bump ")
 	message.WriteString("Update ")
 	var update *v1.DependencyUpdate
+	var assets []gits.GitReleaseAsset
 
 	if srcRepoURL != "" {
 		provider, srcRepo, err := o.CreateGitProviderForURLWithoutKind(srcRepoURL)
 		if err != nil {
-			return "", nil, nil, errors.Wrapf(err, "creating git provider for %s", srcRepoURL)
+			return "", nil, nil, nil, errors.Wrapf(err, "creating git provider for %s", srcRepoURL)
 		}
 		update = &v1.DependencyUpdate{
-			Owner: srcRepo.Organisation,
-			Repo:  srcRepo.Name,
-			URL:   srcRepoURL,
+			DependencyUpdateDetails: v1.DependencyUpdateDetails{
+				Owner: srcRepo.Organisation,
+				Repo:  srcRepo.Name,
+				URL:   srcRepoURL,
+			},
 		}
 		if srcRepo.Host != destRepo.Host {
 			commitMessage.WriteString(srcRepoURL)
@@ -206,7 +354,7 @@ func (o *StepCreatePrOptions) CreateDependencyUpdatePRDetails(kind string, srcRe
 			update.FromVersion = fromVersion
 			release, err := releases.GetRelease(fromVersion, srcRepo.Organisation, srcRepo.Name, provider)
 			if err != nil {
-				return "", nil, nil, errors.Wrapf(err, "getting release from %s/%s", srcRepo.Organisation, srcRepo.Name)
+				return "", nil, nil, nil, errors.Wrapf(err, "getting release from %s/%s", srcRepo.Organisation, srcRepo.Name)
 			}
 			if release != nil {
 				message.WriteString(fmt.Sprintf("from [%s](%s) ", fromVersion, release.HTMLURL))
@@ -223,22 +371,25 @@ func (o *StepCreatePrOptions) CreateDependencyUpdatePRDetails(kind string, srcRe
 			update.ToVersion = toVersion
 			release, err := releases.GetRelease(toVersion, srcRepo.Organisation, srcRepo.Name, provider)
 			if err != nil {
-				return "", nil, nil, errors.Wrapf(err, "getting release from %s/%s", srcRepo.Organisation, srcRepo.Name)
+				return "", nil, nil, nil, errors.Wrapf(err, "getting release from %s/%s", srcRepo.Organisation, srcRepo.Name)
 			}
-
 			if release != nil {
 				message.WriteString(fmt.Sprintf("to [%s](%s)", toVersion, release.HTMLURL))
 				update.ToReleaseHTMLURL = release.HTMLURL
 				update.ToReleaseName = release.Name
+				if release.Assets != nil {
+					assets = *release.Assets
+				}
 			} else {
 				message.WriteString(fmt.Sprintf("to %s", toVersion))
 			}
 		}
 	}
 	message.WriteString(fmt.Sprintf("\n\nCommand run was `%s`", strings.Join(os.Args, " ")))
+	commitMessage.WriteString(fmt.Sprintf("\n\nCommand run was `%s`", strings.Join(os.Args, " ")))
 	return commitMessage.String(), &gits.PullRequestDetails{
-		BranchName: fmt.Sprintf("update-%s-version-%s", kind, string(uuid.NewUUID())),
+		BranchName: fmt.Sprintf("bump-%s-version-%s", kind, string(uuid.NewUUID())),
 		Title:      title.String(),
 		Message:    message.String(),
-	}, update, nil
+	}, update, assets, nil
 }

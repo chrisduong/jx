@@ -448,6 +448,7 @@ func (o *ControllerBuildOptions) updatePipelineActivity(kubeClient kubernetes.In
 	containersTerminated := len(containerStatuses) > 0
 	for _, c := range containerStatuses {
 		name := strings.Replace(strings.TrimPrefix(c.Name, "build-step-"), "-", " ", -1)
+		name = strings.Replace(strings.TrimPrefix(c.Name, "step-"), "-", " ", -1)
 		title := strings.Title(name)
 		_, stage, _ := kube.GetOrCreateStage(activity, title)
 
@@ -606,7 +607,7 @@ func (o *ControllerBuildOptions) updatePipelineActivityForRun(kubeClient kuberne
 	spec := &activity.Spec
 	var biggestFinishedAt metav1.Time
 
-	allCompleted := true
+	allStagesCompleted := true
 	failed := false
 	running := true
 	for i := range spec.Steps {
@@ -634,61 +635,67 @@ func (o *ControllerBuildOptions) updatePipelineActivityForRun(kubeClient kuberne
 					failed = true
 				}
 			} else {
-				allCompleted = false
+				allStagesCompleted = false
 			}
 			if stage.Status == v1.ActivityStatusTypeRunning {
 				running = true
 			}
 			if stage.Status == v1.ActivityStatusTypeRunning || stage.Status == v1.ActivityStatusTypePending {
-				allCompleted = false
+				allStagesCompleted = false
 			}
 		}
 	}
 
-	if allCompleted {
+	if allStagesCompleted {
 		if failed {
 			spec.Status = v1.ActivityStatusTypeFailed
+		} else if pri.Type == tekton.MetaPipeline {
+			spec.Status = v1.ActivityStatusTypePending
 		} else {
 			spec.Status = v1.ActivityStatusTypeSucceeded
 		}
-		if !biggestFinishedAt.IsZero() {
-			spec.CompletedTimestamp = &biggestFinishedAt
-		}
 
-		// log that the build completed
-		logJobCompletedState(activity)
-
-		// lets ensure we overwrite any canonical jenkins build URL thats generated automatically
-		if spec.BuildLogsURL == "" {
-			podInterface := kubeClient.CoreV1().Pods(ns)
-
-			envName := kube.LabelValueDevEnvironment
-			devEnv := o.EnvironmentCache.Item(envName)
-			location := v1.StorageLocation{}
-			settings := &devEnv.Spec.TeamSettings
-			if devEnv == nil {
-				log.Logger().Warnf("No Environment %s found", envName)
-			} else {
-				location = settings.StorageLocationOrDefault(kube.ClassificationLogs)
+		if pri.Type != tekton.MetaPipeline {
+			if !biggestFinishedAt.IsZero() {
+				spec.CompletedTimestamp = &biggestFinishedAt
 			}
-			if location.IsEmpty() {
-				location.GitURL = activity.Spec.GitURL
-				if location.GitURL == "" {
-					log.Logger().Warnf("No GitURL on PipelineActivity %s", activity.Name)
+
+			// log that the build completed
+			logJobCompletedState(activity)
+
+			// TODO: This will need to be reworked for per-step logs, so leaving alone as part of metapipeline work
+			// lets ensure we overwrite any canonical jenkins build URL thats generated automatically
+			if spec.BuildLogsURL == "" {
+				podInterface := kubeClient.CoreV1().Pods(ns)
+
+				envName := kube.LabelValueDevEnvironment
+				devEnv := o.EnvironmentCache.Item(envName)
+				location := v1.StorageLocation{}
+				settings := &devEnv.Spec.TeamSettings
+				if devEnv == nil {
+					log.Logger().Warnf("No Environment %s found", envName)
+				} else {
+					location = settings.StorageLocationOrDefault(kube.ClassificationLogs)
 				}
-			}
+				if location.IsEmpty() {
+					location.GitURL = activity.Spec.GitURL
+					if location.GitURL == "" {
+						log.Logger().Warnf("No GitURL on PipelineActivity %s", activity.Name)
+					}
+				}
 
-			masker, err := kube.NewLogMasker(kubeClient, ns)
-			if err != nil {
-				log.Logger().Warnf("Failed to create LogMasker in namespace %s: %s", ns, err.Error())
-			}
+				masker, err := kube.NewLogMasker(kubeClient, ns)
+				if err != nil {
+					log.Logger().Warnf("Failed to create LogMasker in namespace %s: %s", ns, err.Error())
+				}
 
-			logURL, err := o.generateBuildLogURL(podInterface, ns, activity, pri.PipelineRun, pod, location, settings, o.InitGitCredentials, masker)
-			if err != nil {
-				log.Logger().Warnf("%s", err)
-			}
-			if logURL != "" {
-				spec.BuildLogsURL = logURL
+				logURL, err := o.generateBuildLogURL(podInterface, ns, activity, pri.PipelineRun, pod, location, settings, o.InitGitCredentials, masker)
+				if err != nil {
+					log.Logger().Warnf("%s", err)
+				}
+				if logURL != "" {
+					spec.BuildLogsURL = logURL
+				}
 			}
 		}
 
@@ -722,6 +729,7 @@ func updateForStage(si *tekton.StageInfo, a *v1.PipelineActivity) {
 		containersTerminated = len(containerStatuses) > 0
 		for _, c := range containerStatuses {
 			name := strings.Replace(strings.TrimPrefix(c.Name, "build-step-"), "-", " ", -1)
+			name = strings.Replace(strings.TrimPrefix(c.Name, "step-"), "-", " ", -1)
 			title := strings.Title(name)
 			step, _ := kube.GetOrCreateStepInStage(stage, title)
 			running := c.State.Running

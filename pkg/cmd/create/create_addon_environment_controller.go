@@ -3,6 +3,7 @@ package create
 import (
 	"fmt"
 	"github.com/jenkins-x/jx/pkg/cmd/initcmd"
+	config2 "github.com/jenkins-x/jx/pkg/config"
 	"strconv"
 	"strings"
 
@@ -240,9 +241,12 @@ func (o *CreateAddonEnvironmentControllerOptions) Run() error {
 	setValues = append(setValues, "source.owner="+gitInfo.Organisation)
 	setValues = append(setValues, "source.repo="+gitInfo.Name)
 	setValues = append(setValues, "source.serverUrl="+serverURL)
+	setValues = append(setValues, "tekton.auth.git.url="+serverURL)
 	setValues = append(setValues, "source.gitKind="+o.GitKind)
 	setValues = append(setValues, "source.user="+o.GitUser)
+	setValues = append(setValues, "tekton.auth.git.username="+o.GitUser)
 	setValues = append(setValues, "source.token="+o.GitToken)
+	setValues = append(setValues, "tekton.auth.git.password="+o.GitToken)
 	if o.ProjectID != "" {
 		setValues = append(setValues, "projectId="+o.ProjectID)
 	}
@@ -269,7 +273,7 @@ func (o *CreateAddonEnvironmentControllerOptions) Run() error {
 		SetValues:      setValues,
 		HelmUpdate:     true,
 		Repository:     kube.DefaultChartMuseumURL,
-		VersionsGitURL: opts.DefaultVersionsURL,
+		VersionsGitURL: config2.DefaultVersionsURL,
 	}
 	err = o.InstallChartWithOptions(helmOptions)
 	if err != nil {

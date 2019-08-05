@@ -6,6 +6,7 @@ require (
 	github.com/IBM-Cloud/bluemix-go v0.0.0-20181008063305-d718d474c7c2
 	github.com/Jeffail/gabs v1.1.1
 	github.com/MakeNowJust/heredoc v0.0.0-20171113091838-e9091a26100e
+	github.com/Masterminds/semver v1.4.2
 	github.com/Netflix/go-expect v0.0.0-20180814212900-124a37274874
 	github.com/Pallinder/go-randomdata v0.0.0-20180616180521-15df0648130a
 	github.com/StackExchange/wmi v0.0.0-20180116203802-5d049714c4a6 // indirect
@@ -27,7 +28,6 @@ require (
 	github.com/cloudflare/cfssl v0.0.0-20190409034051-768cd563887f
 	github.com/codeship/codeship-go v0.0.0-20180717142545-7793ca823354
 	github.com/cpuguy83/go-md2man v1.0.8 // indirect
-	github.com/d4l3k/messagediff v1.2.1 // indirect
 	github.com/danwakefield/fnmatch v0.0.0-20160403171240-cbb64ac3d964 // indirect
 	github.com/davecgh/go-spew v1.1.1
 	github.com/denormal/go-gitignore v0.0.0-20180713143441-75ce8f3e513c
@@ -37,6 +37,7 @@ require (
 	github.com/dsnet/compress v0.0.0-20171208185109-cc9eb1d7ad76 // indirect
 	github.com/elazarl/goproxy v0.0.0-20181111060418-2ce16c963a8a // indirect
 	github.com/emirpasic/gods v1.9.0 // indirect
+	github.com/evanphx/json-patch v4.1.0+incompatible
 	github.com/fatih/color v1.7.0
 	github.com/fatih/structs v1.1.0
 	github.com/flynn/go-shlex v0.0.0-20150515145356-3f9db97f8568 // indirect
@@ -45,7 +46,6 @@ require (
 	github.com/gliderlabs/ssh v0.1.1 // indirect
 	github.com/go-ole/go-ole v1.2.1 // indirect
 	github.com/go-openapi/jsonreference v0.19.2
-	github.com/go-openapi/loads v0.19.2 // indirect
 	github.com/go-openapi/spec v0.19.2
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b
@@ -75,7 +75,6 @@ require (
 	github.com/knative/pkg v0.0.0-20190402181056-ff46edef0ae5
 	github.com/knative/serving v0.5.0
 	github.com/konsorten/go-windows-terminal-sequences v1.0.2 // indirect
-	github.com/kubernetes-incubator/reference-docs v0.0.0-20190410022412-9642bd3f4de5 // indirect
 	github.com/lusis/go-slackbot v0.0.0-20180109053408-401027ccfef5 // indirect
 	github.com/lusis/slack-test v0.0.0-20180109053238-3c758769bfa6 // indirect
 	github.com/magiconair/properties v1.8.0
@@ -83,16 +82,11 @@ require (
 	github.com/mattbaird/jsonpatch v0.0.0-20171005235357-81af80346b1a
 	github.com/mholt/archiver v3.1.1+incompatible
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
-	github.com/mitchellh/go-ps v0.0.0-20170309133038-4fdf99ab2936 // indirect
 	github.com/mitchellh/mapstructure v1.1.2
 	github.com/nlopes/slack v0.0.0-20180721202243-347a74b1ea30
 	github.com/nwaples/rardecode v1.0.0 // indirect
 	github.com/onsi/ginkgo v1.7.0
 	github.com/onsi/gomega v1.4.3
-	github.com/opencontainers/runc v0.1.1 // indirect
-	github.com/ory/dockertest v3.3.4+incompatible // indirect
-	github.com/pascaldekloe/goe v0.0.0-20180627143212-57f6aae5913c // indirect
-	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pborman/uuid v1.2.0
 	github.com/pelletier/go-buffruneio v0.2.0 // indirect
 	github.com/petergtz/pegomock v2.2.0+incompatible
@@ -106,7 +100,7 @@ require (
 	github.com/russross/blackfriday v1.5.1
 	github.com/ryanuber/go-glob v0.0.0-20170128012129-256dc444b735 // indirect
 	github.com/satori/go.uuid v1.2.1-0.20180103174451-36e9d2ebbde5
-	github.com/sergi/go-diff v1.0.0
+	github.com/sergi/go-diff v1.0.0 // indirect
 	github.com/sethvargo/go-password v0.1.2
 	github.com/shirou/gopsutil v0.0.0-20180901134234-eb1f1ab16f2e
 	github.com/shirou/w32 v0.0.0-20160930032740-bb4de0191aa4 // indirect
@@ -117,7 +111,7 @@ require (
 	github.com/src-d/gcfg v1.3.0 // indirect
 	github.com/stoewer/go-strcase v1.0.1
 	github.com/stretchr/testify v1.3.0
-	github.com/tektoncd/pipeline v0.3.2-0.20190508171555-91b53326d376
+	github.com/tektoncd/pipeline v0.5.1
 	github.com/trivago/tgo v1.0.1 // indirect
 	github.com/ulikunitz/xz v0.5.6 // indirect
 	github.com/wbrefvem/go-bitbucket v0.0.0-20190128183802-fc08fd046abb
@@ -131,10 +125,10 @@ require (
 	golang.org/x/oauth2 v0.0.0-20181203162652-d668ce993890
 	golang.org/x/sync v0.0.0-20190423024810-112230192c58
 	golang.org/x/sys v0.0.0-20190616124812-15dcb6c0061f
+	golang.org/x/xerrors v0.0.0-20190513163551-3ee3066db522 // indirect
 	google.golang.org/api v0.1.0 // indirect
 	google.golang.org/genproto v0.0.0-20190219182410-082222b4a5c5 // indirect
 	gopkg.in/AlecAivazis/survey.v1 v1.8.3
-	gopkg.in/d4l3k/messagediff.v1 v1.2.1
 	gopkg.in/src-d/go-billy.v4 v4.2.0 // indirect
 	gopkg.in/src-d/go-git-fixtures.v3 v3.3.0 // indirect
 	gopkg.in/src-d/go-git.v4 v4.5.0

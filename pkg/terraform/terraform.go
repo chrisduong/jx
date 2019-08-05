@@ -56,6 +56,21 @@ func Plan(terraformDir string, terraformVars string, serviceAccountPath string) 
 	return out, nil
 }
 
+// Output displays a terraform output from the local terraform.tfstate
+func Output(output string) (string, error) {
+	log.Logger().Debugf("Extracting terraform output %s", output)
+	cmd := util.Command{
+		Name: "terraform",
+		Args: []string{"output",
+			output},
+	}
+	out, err := cmd.RunWithoutRetry()
+	if err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 func Apply(terraformDir string, terraformVars string, serviceAccountPath string, stdout io.Writer, stderr io.Writer) error {
 	log.Logger().Infof("Applying Terraform")
 	cmd := util.Command{

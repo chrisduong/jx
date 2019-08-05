@@ -1,7 +1,7 @@
 apiVersion: jenkins.io/v1
 kind: Release
 metadata:
-  creationTimestamp: "2019-06-08T13:44:21Z"
+  creationTimestamp: "2019-07-03T14:08:20Z"
   deletionTimestamp: null
   name: '{{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}'
 spec:
@@ -9,73 +9,13 @@ spec:
   - author: {}
     branch: master
     committer: {}
-    issueIds:
-    - "4209"
     message: |
-      fix: support multi-namespaces in charts with tillerless (#4209)
-
-      * fix: support multi-namespaces in charts with tillerless
-
-      minor tweak to Gareth's PR
-
-      * chore: rebase
-
-      * chore: rebase
-
-      * chore: fix test
-
-      * chore: fix test
-
-      * chore: fix test
-    sha: 576dfbdb455e8bdde84a0fc7a5c42e5c7cfdd943
+      upgrade jenkins-x/jx-ts-client client to jx 2.0.398
+    sha: d5e2cb38a18e697e484bf1e8057cb64155662f7e
   gitCloneUrl: https://github.com/jenkins-x/jx.git
   gitHttpUrl: https://github.com/jenkins-x/jx
   gitOwner: jenkins-x
   gitRepository: jx
   name: '{{ .Chart.Name }}'
-  pullRequests:
-  - assignees:
-    - accountReference:
-      - id: garethjevans
-        provider: jenkins.io/git-github-userid
-      login: garethjevans
-      name: Gareth Evans
-    - accountReference:
-      - id: rawlingsj
-        provider: jenkins.io/git-github-userid
-      email: rawlingsj80@gmail.com
-      login: rawlingsj
-      name: James Rawlings
-    body: minor tweak to Gareth's PR
-    closedBy:
-      accountReference:
-      - id: jstrachan
-        provider: jenkins.io/git-github-userid
-      email: james.strachan@gmail.com
-      login: jstrachan
-      name: James Strachan
-    creationTimestamp: "2019-06-08T07:11:56Z"
-    id: "4209"
-    labels:
-    - color: ededed
-      name: https://api.github.com/repos/jenkins-x/jx/labels/approved
-      url: approved
-    - color: ededed
-      name: https://api.github.com/repos/jenkins-x/jx/labels/lgtm
-      url: lgtm
-    - color: ededed
-      name: https://api.github.com/repos/jenkins-x/jx/labels/size/L
-      url: size/L
-    state: closed
-    title: 'fix: support multi-namespaces in charts with tillerless'
-    url: https://github.com/jenkins-x/jx/pull/4209
-    user:
-      accountReference:
-      - id: jstrachan
-        provider: jenkins.io/git-github-userid
-      email: james.strachan@gmail.com
-      login: jstrachan
-      name: James Strachan
-  releaseNotesURL: https://github.com/jenkins-x/jx/releases/tag/2.0.247
-  version: 2.0.247
+  version: 2.0.399
 status: {}

@@ -2,14 +2,13 @@
 set -e
 
 echo "verifying Pull Request"
-JX=./build/linux/jx
 export ORG="jenkinsxio"
 export APP_NAME="jx"
 export TEAM="$(echo ${BRANCH_NAME}-$BUILD_ID  | tr '[:upper:]' '[:lower:]')"
 
-export GHE_CREDS_PSW="$(${JX} step credential -s jx-pipeline-git-github-ghe | sed -e 's/PASS//' -e 's/coverage: [0-9\.]*% of statements in [\w\.\/]*//' | tr -d [:space:])"
-export JENKINS_CREDS_PSW="$(${JX} step credential -s  test-jenkins-user | sed -e 's/PASS//' -e 's/coverage: [0-9\.]*% of statements in [\w\.\/]*//' | tr -d [:space:])"
-export GKE_SA="$(${JX} step credential -s gke-sa | sed -e 's/PASS//' -e 's/coverage: [0-9\.]*% of statements in [\w\.\/]*//' | tr -d [:space:])"
+export GHE_CREDS_PSW="$(jx step credential -s jx-pipeline-git-github-ghe | sed -e 's/PASS//' -e 's/coverage: [0-9\.]*% of statements in [\w\.\/]*//' | tr -d [:space:])"
+export JENKINS_CREDS_PSW="$(jx step credential -s  test-jenkins-user | sed -e 's/PASS//' -e 's/coverage: [0-9\.]*% of statements in [\w\.\/]*//' | tr -d [:space:])"
+export GKE_SA="$(jx step credential -s gke-sa | sed -e 's/PASS//' -e 's/coverage: [0-9\.]*% of statements in [\w\.\/]*//' | tr -d [:space:])"
 
 export REPORTS_DIR="${BASE_WORKSPACE}/build/reports"
 
@@ -34,8 +33,8 @@ export GIT_COMMITTER_NAME="dev1"
 mkdir -p $JX_HOME
 
 # Disable coverage for jx version as we don't validate the output at all
-COVER_JX_BINARY=false ${JX} version
-${JX} step git credentials
+COVER_JX_BINARY=false jx version
+jx step git credentials
 
 # lets create a team for this PR and run the BDD tests
 gcloud auth activate-service-account --key-file ${GKE_SA}
@@ -51,10 +50,8 @@ echo "creating team: $TEAM"
 git config --global --add user.name JenkinsXBot
 git config --global --add user.email jenkins-x@googlegroups.com
 
-cp ${JX} /usr/bin
-
 # lets trigger the BDD tests in a new team and git provider
-${JX} step bdd -b --provider=gke --git-provider=ghe --git-provider-url=https://github.beescloud.com --git-username dev1 --git-api-token $GHE_CREDS_PSW --default-admin-password $JENKINS_CREDS_PSW --no-delete-app --no-delete-repo --tests install --tests test-create-spring
+jx step bdd -b --provider=gke --git-provider=ghe --git-provider-url=https://github.beescloud.com --git-username dev1 --git-api-token $GHE_CREDS_PSW --default-admin-password $JENKINS_CREDS_PSW --no-delete-app --no-delete-repo --tests install --tests test-create-spring
 
 # Reset the namespace back to jx after test for any followup steps
-COVER_JX_BINARY=false ${JX} ns jx
+COVER_JX_BINARY=false jx ns jx
